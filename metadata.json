@@ -1,0 +1,6 @@
+{
+  "name": "E-Warga",
+  "description": "Platform digitalisasi pengajuan surat pengantar warga dari tingkat RT, RW, hingga Kecamatan dan Disdukcapil.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
