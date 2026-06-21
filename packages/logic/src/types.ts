@@ -11,6 +11,7 @@ export interface UserProfile {
   no_wa: string; // WhatsApp number
   role: UserRole;
   status_verifikasi: 'pending' | 'verified' | 'rejected';
+  provinsi?: string;
   kecamatan?: string;
   kelurahan?: string;
   kabupaten?: string;
@@ -42,6 +43,11 @@ export interface SuratPengantar {
   warga_rt?: string;
   warga_rw?: string;
   warga_no_wa?: string;
+  warga_provinsi?: string;
+  warga_kabupaten?: string;
+  warga_kecamatan?: string;
+  warga_kelurahan?: string;
+  warga_kampung?: string;
   jenis_surat: JenisSurat;
   keperluan: string;
   status: SuratStatus;

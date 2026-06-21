@@ -5,14 +5,20 @@ import { createServer as createViteServer } from 'vite';
 
 // Import our shared database helper
 import { applySqlMigrations } from './packages/supabase/src/helpers.js';
+import { getSupabase, hasSupabaseConfig } from './packages/supabase/src/index.js';
 
 // Derive ES6 Paths
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 
 async function startServer() {
-  const app = express();
-  const PORT = 3000;
+  const app = reportError(express());
+  const PORT = process.env.PORT || 3000;
+
+  // Helper inside startServer to avoid reporting error issues
+  function reportError(expressApp: any) {
+    return expressApp;
+  }
 
   // JSON Body Parser for API
   app.use(express.json());
@@ -42,6 +48,31 @@ async function startServer() {
       }
     } catch (err: any) {
       return res.status(500).json({ error: err.message || String(err) });
+    }
+  });
+
+  // DB Keep-Alive endpoint to prevent Supabase Free Tier auto-pause
+  app.get('/api/keep-alive', async (req, res) => {
+    try {
+      if (!hasSupabaseConfig()) {
+        return res.json({ status: 'offline', msg: 'Database Supabase belum dikonfigurasi pada server.' });
+      }
+
+      const supabase = getSupabase();
+      // Query super ringan ke tabel profiles untuk men-trigger DB activity agar Supabase tetap terjaga
+      const { data, error } = await supabase.from('profiles').select('id').limit(1);
+      
+      if (error) {
+        return res.status(500).json({ status: 'error', msg: 'Gagal query database', error });
+      }
+      
+      return res.json({ 
+        status: 'alive', 
+        msg: 'Berhasil ping Supabase! Koneksi database terjaga aktif.', 
+        timestamp: new Date() 
+      });
+    } catch (err: any) {
+      return res.status(500).json({ status: 'error', error: err.message || String(err) });
     }
   });
 

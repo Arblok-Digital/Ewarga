@@ -32,7 +32,14 @@ import {
   Shield,
   Check,
   Search,
-  Users
+  Users,
+  MessageSquare,
+  Zap,
+  Bell,
+  Sun,
+  Moon,
+  Printer,
+  Download
 } from 'lucide-react';
 
 import {
@@ -60,6 +67,16 @@ interface AdSponsor {
   title: string;
   desc: string;
   waLink: string;
+}
+
+export interface E_WargaNotification {
+  id: string;
+  title: string;
+  message: string;
+  timestamp: string;
+  read: boolean;
+  suratId?: string;
+  type: 'info' | 'success' | 'alert';
 }
 
 // Regional database for West Java (Provinsi Jawa Barat) formatted as Kabupaten/Kota -> Kecamatan -> Kelurahan/Desa
@@ -200,7 +217,12 @@ const INITIAL_PROFILES_DEMO: UserProfile[] = [
     rw: '004',
     no_wa: '081234567890',
     role: 'warga',
-    status_verifikasi: 'verified'
+    status_verifikasi: 'verified',
+    provinsi: 'JAWA BARAT',
+    kabupaten: 'Kota Bandung',
+    kecamatan: 'Coblong',
+    kelurahan: 'Dago',
+    kampung: 'Blok Kancil'
   },
   {
     id: 'rt-test-id',
@@ -212,7 +234,12 @@ const INITIAL_PROFILES_DEMO: UserProfile[] = [
     rw: '004',
     no_wa: '085711112222',
     role: 'rt',
-    status_verifikasi: 'verified'
+    status_verifikasi: 'verified',
+    provinsi: 'JAWA BARAT',
+    kabupaten: 'Kota Bandung',
+    kecamatan: 'Coblong',
+    kelurahan: 'Dago',
+    kampung: 'Blok Kancil'
   },
   {
     id: 'rw-test-id',
@@ -224,7 +251,11 @@ const INITIAL_PROFILES_DEMO: UserProfile[] = [
     rw: '004',
     no_wa: '089988887777',
     role: 'rw',
-    status_verifikasi: 'verified'
+    status_verifikasi: 'verified',
+    provinsi: 'JAWA BARAT',
+    kabupaten: 'Kota Bandung',
+    kecamatan: 'Coblong',
+    kelurahan: 'Dago'
   },
   {
     id: 'admin-test-id',
@@ -236,7 +267,11 @@ const INITIAL_PROFILES_DEMO: UserProfile[] = [
     rw: '004',
     no_wa: '081122334455',
     role: 'admin',
-    status_verifikasi: 'verified'
+    status_verifikasi: 'verified',
+    provinsi: 'JAWA BARAT',
+    kabupaten: 'Kota Bandung',
+    kecamatan: 'Coblong',
+    kelurahan: 'Dago'
   }
 ];
 
@@ -273,11 +308,65 @@ const INITIAL_SURAT_DEMO: SuratPengantar[] = [
 ];
 
 export default function App() {
-  const [activeTab, setActiveTab] = useState<'simulation' | 'dev_console' | 'registration_portal'>('simulation');
+  const [activeTab, setActiveTab] = useState<'simulation' | 'dev_console' | 'registration_portal' | 'chat_siskamling'>('simulation');
   const [currentRole, setCurrentRole] = useState<UserRole>('warga');
+  const [appTheme, setAppTheme] = useState<'emerald' | 'ocean' | 'twilight' | 'sunrise'>(() => {
+    return (localStorage.getItem('e_warga_theme') as any) || 'emerald';
+  });
+
+  useEffect(() => {
+    localStorage.setItem('e_warga_theme', appTheme);
+  }, [appTheme]);
+
+  const [isDarkMode, setIsDarkMode] = useState<boolean>(() => {
+    const cached = localStorage.getItem('e_warga_dark_mode');
+    if (cached !== null) {
+      return cached === 'true';
+    }
+    if (typeof window !== 'undefined' && window.matchMedia) {
+      return window.matchMedia('(prefers-color-scheme: dark)').matches;
+    }
+    return false;
+  });
+
+  useEffect(() => {
+    localStorage.setItem('e_warga_dark_mode', String(isDarkMode));
+  }, [isDarkMode]);
+
+  useEffect(() => {
+    if (typeof window === 'undefined' || !window.matchMedia) return;
+    const mediaQuery = window.matchMedia('(prefers-color-scheme: dark)');
+    const handleChange = (e: MediaQueryListEvent) => {
+      if (localStorage.getItem('e_warga_dark_mode') === null) {
+        setIsDarkMode(e.matches);
+      }
+    };
+    mediaQuery.addEventListener('change', handleChange);
+    return () => mediaQuery.removeEventListener('change', handleChange);
+  }, []);
+
+  // Notifications system states
+  const [notifications, setNotifications] = useState<E_WargaNotification[]>(() => {
+    const cached = localStorage.getItem('e_warga_notifications');
+    return cached ? JSON.parse(cached) : [];
+  });
+  const [showNotifDropdown, setShowNotifDropdown] = useState<boolean>(false);
+  const prevSuratListRef = React.useRef<any[]>([]);
+
+  // Request browser notification API permission if needed
+  useEffect(() => {
+    if ('Notification' in window && Notification.permission === 'default') {
+      Notification.requestPermission().catch(() => {});
+    }
+  }, []);
   
   // Registration and verified warga management states
   const [activeRegTab, setActiveRegTab] = useState<'register' | 'manage'>('register');
+  const [actingSuratId, setActingSuratId] = useState<string | null>(null);
+  const [actionType, setActionType] = useState<'approve' | 'reject' | null>(null);
+  const [formCustomNo, setFormCustomNo] = useState<string>('');
+  const [formComment, setFormComment] = useState<string>('');
+  const [printingSurat, setPrintingSurat] = useState<SuratPengantar | null>(null);
   const [searchQuery, setSearchQuery] = useState('');
   const [registerForm, setRegisterForm] = useState({
     nama_lengkap: '',
@@ -292,11 +381,164 @@ export default function App() {
     file_kk: '',
     ktpSize: 0,
     kkSize: 0,
+    provinsi: 'JAWA BARAT',
+    kabupaten: 'Kota Bandung',
     kecamatan: 'Coblong',
     kelurahan: 'Dago',
-    kabupaten: 'Kota Bandung',
     kampung: ''
   });
+
+  // Live Indonesia Regional API States (EMSifa Integration)
+  const [useLiveApi, setUseLiveApi] = useState<boolean>(true); // Defaulting to true since user requested Indonesia-wide data
+  const [provinces, setProvinces] = useState<{ id: string; name: string }[]>([]);
+  const [regencies, setRegencies] = useState<{ id: string; name: string }[]>([]);
+  const [districts, setDistricts] = useState<{ id: string; name: string }[]>([]);
+  const [villages, setVillages] = useState<{ id: string; name: string }[]>([]);
+  
+  const [selectedProvId, setSelectedProvId] = useState<string>('32'); // Default to Jawa Barat ID
+  const [selectedRegId, setSelectedRegId] = useState<string>('');
+  const [selectedDistId, setSelectedDistId] = useState<string>('');
+  const [selectedVillId, setSelectedVillId] = useState<string>('');
+  const [isLoadingWilayah, setIsLoadingWilayah] = useState<boolean>(false);
+
+  // ==========================================
+  // DUAL-REGION ENGINE: BUILT-IN VS LIVE EMSIFA
+  // ==========================================
+
+  // 1. Fetch Provinces list once EMSifa is activated
+  useEffect(() => {
+    if (!useLiveApi) return;
+    const loadProvinces = async () => {
+      setIsLoadingWilayah(true);
+      try {
+        const res = await fetch('https://www.emsifa.com/api-wilayah-indonesia/api/provinces.json');
+        if (!res.ok) throw new Error('Network error');
+        const list = await res.json();
+        setProvinces(list);
+        
+        // Match default JAWA BARAT ID if present, otherwise select first province
+        const jabar = list.find((p: any) => p.name.toLowerCase().includes('jawa barat'));
+        const targetId = jabar ? jabar.id : (list[0]?.id || '');
+        const targetName = jabar ? jabar.name : (list[0]?.name || '');
+        
+        setSelectedProvId(targetId);
+        setRegisterForm(prev => ({ ...prev, provinsi: targetName }));
+      } catch (err) {
+        console.error('Gagal fetch wilayah provinsi dari emsifa:', err);
+      } finally {
+        setIsLoadingWilayah(false);
+      }
+    };
+    loadProvinces();
+  }, [useLiveApi]);
+
+  // 2. Fetch Regencies list when selectedProvinceId changes
+  useEffect(() => {
+    if (!useLiveApi || !selectedProvId) return;
+    const loadRegencies = async () => {
+      setIsLoadingWilayah(true);
+      try {
+        const res = await fetch(`https://www.emsifa.com/api-wilayah-indonesia/api/regencies/${selectedProvId}.json`);
+        if (!res.ok) throw new Error('Network error');
+        const list = await res.json();
+        setRegencies(list);
+        
+        const firstReg = list[0];
+        if (firstReg) {
+          setSelectedRegId(firstReg.id);
+          setRegisterForm(prev => ({ ...prev, kabupaten: firstReg.name }));
+        } else {
+          setSelectedRegId('');
+          setRegisterForm(prev => ({ ...prev, kabupaten: '' }));
+        }
+      } catch (err) {
+        console.error('Gagal fetch wilayah kabupaten dari emsifa:', err);
+      } finally {
+        setIsLoadingWilayah(false);
+      }
+    };
+    loadRegencies();
+  }, [useLiveApi, selectedProvId]);
+
+  // 3. Fetch Districts list when selectedRegId changes
+  useEffect(() => {
+    if (!useLiveApi || !selectedRegId) return;
+    const loadDistricts = async () => {
+      setIsLoadingWilayah(true);
+      try {
+        const res = await fetch(`https://www.emsifa.com/api-wilayah-indonesia/api/districts/${selectedRegId}.json`);
+        if (!res.ok) throw new Error('Network error');
+        const list = await res.json();
+        setDistricts(list);
+        
+        const firstDist = list[0];
+        if (firstDist) {
+          setSelectedDistId(firstDist.id);
+          setRegisterForm(prev => ({ ...prev, kecamatan: firstDist.name }));
+        } else {
+          setSelectedDistId('');
+          setRegisterForm(prev => ({ ...prev, kecamatan: '' }));
+        }
+      } catch (err) {
+        console.error('Gagal fetch wilayah kecamatan dari emsifa:', err);
+      } finally {
+        setIsLoadingWilayah(false);
+      }
+    };
+    loadDistricts();
+  }, [useLiveApi, selectedRegId]);
+
+  // 4. Fetch Villages list when selectedDistId changes
+  useEffect(() => {
+    if (!useLiveApi || !selectedDistId) return;
+    const loadVillages = async () => {
+      setIsLoadingWilayah(true);
+      try {
+        const res = await fetch(`https://www.emsifa.com/api-wilayah-indonesia/api/villages/${selectedDistId}.json`);
+        if (!res.ok) throw new Error('Network error');
+        const list = await res.json();
+        setVillages(list);
+        
+        const firstVill = list[0];
+        if (firstVill) {
+          setSelectedVillId(firstVill.id);
+          setRegisterForm(prev => ({ ...prev, kelurahan: firstVill.name }));
+        } else {
+          setSelectedVillId('');
+          setRegisterForm(prev => ({ ...prev, kelurahan: '' }));
+        }
+      } catch (err) {
+        console.error('Gagal fetch wilayah kelurahan dari emsifa:', err);
+      } finally {
+        setIsLoadingWilayah(false);
+      }
+    };
+    loadVillages();
+  }, [useLiveApi, selectedDistId]);
+
+  const handleLiveProvinceChange = (provId: string) => {
+    const provName = provinces.find(p => p.id === provId)?.name || '';
+    setSelectedProvId(provId);
+    setRegisterForm(prev => ({ ...prev, provinsi: provName }));
+  };
+
+  const handleLiveRegencyChange = (regId: string) => {
+    const regName = regencies.find(r => r.id === regId)?.name || '';
+    setSelectedRegId(regId);
+    setRegisterForm(prev => ({ ...prev, kabupaten: regName }));
+  };
+
+  const handleLiveDistrictChange = (distId: string) => {
+    const distName = districts.find(d => d.id === distId)?.name || '';
+    setSelectedDistId(distId);
+    setRegisterForm(prev => ({ ...prev, kecamatan: distName }));
+  };
+
+  const handleLiveVillageChange = (villId: string) => {
+    const villName = villages.find(v => v.id === villId)?.name || '';
+    setSelectedVillId(villId);
+    setRegisterForm(prev => ({ ...prev, kelurahan: villName }));
+  };
 
   // Database Configuration status
   const [supabaseConnected, setSupabaseConnected] = useState<boolean>(false);
@@ -357,6 +599,15 @@ export default function App() {
   });
 
   const [editingSponsorId, setEditingSponsorId] = useState<string | null>(null);
+
+  // User collapsible visibility states to keep UI extremely clean and uncrowded ("Untuk keterangan lu hide aja")
+  const [showRtRwGuide, setShowRtRwGuide] = useState<boolean>(false);
+  const [showRegionalInfo, setShowRegionalInfo] = useState<boolean>(false);
+  const [showSupabaseGuide, setShowSupabaseGuide] = useState<boolean>(false);
+  const [showMonorepoInfo, setShowMonorepoInfo] = useState<boolean>(false);
+  const [showSiskamlingGuide, setShowSiskamlingGuide] = useState<boolean>(false);
+  const [showRegistrationGuide, setShowRegistrationGuide] = useState<boolean>(false);
+  const [showSimulatorGuide, setShowSimulatorGuide] = useState<boolean>(false);
 
   // Helper to save sponsors to local storage
   const saveSponsorsState = (updatedSponsors: AdSponsor[]) => {
@@ -578,7 +829,7 @@ export default function App() {
       // 2. Fetch submissions joined with profiles
       const { data: dbSubmissions, error: sError } = await supabase
         .from('surat_pengantar')
-        .select('*, profiles(nama_lengkap, rt, rw, no_wa)')
+        .select('*, profiles(nama_lengkap, rt, rw, no_wa, provinsi, kabupaten, kecamatan, kelurahan, kampung)')
         .order('created_at', { ascending: false });
 
       if (sError) {
@@ -591,6 +842,11 @@ export default function App() {
           warga_rt: s.profiles?.rt || '001',
           warga_rw: s.profiles?.rw || '001',
           warga_no_wa: s.profiles?.no_wa || '',
+          warga_provinsi: s.profiles?.provinsi || '',
+          warga_kabupaten: s.profiles?.kabupaten || '',
+          warga_kecamatan: s.profiles?.kecamatan || '',
+          warga_kelurahan: s.profiles?.kelurahan || '',
+          warga_kampung: s.profiles?.kampung || '',
           jenis_surat: s.jenis_surat,
           keperluan: s.keperluan,
           status: s.status,
@@ -641,6 +897,92 @@ export default function App() {
       fetchFromSupabase();
     }
   }, []);
+
+  // Track status changes reactively for notifications
+  useEffect(() => {
+    if (prevSuratListRef.current && prevSuratListRef.current.length > 0) {
+      suratList.forEach(currentSurat => {
+        const prevSurat = prevSuratListRef.current.find((s: any) => s.id === currentSurat.id);
+        if (prevSurat && prevSurat.status !== currentSurat.status) {
+          // Detect approval transitions
+          const isApprovedTransition = 
+            (prevSurat.status === 'menunggu_rt' && currentSurat.status === 'menunggu_rw') || // RT Approved
+            (prevSurat.status === 'menunggu_rw' && currentSurat.status === 'siap_diambil') || // RW Approved
+            (prevSurat.status === 'menunggu_rt' && currentSurat.status === 'siap_diambil') ||
+            (currentSurat.status === 'selesai' && prevSurat.status !== 'selesai'); // Completed / Fully Approved
+
+          const isRejectedTransition =
+            (currentSurat.status === 'ditolak_rt' || currentSurat.status === 'ditolak_rw');
+
+          if (isApprovedTransition) {
+            let approver = 'Ketua RT';
+            let details = 'Dokumen Anda disetujui di tingkat RT dan diteruskan ke RW.';
+            if (currentSurat.status === 'siap_diambil') {
+              approver = 'Ketua RW';
+              details = 'Dokumen Anda telah disetujui & ditandatangani RW! Silakan ambil berkas basah di Sekretariat RW.';
+            } else if (currentSurat.status === 'selesai') {
+              approver = 'Sistem E-Warga';
+              details = `Pengantar ${currentSurat.jenis_surat} selesai diterbitkan secara sah dan diarsipkan.`;
+            }
+
+            const newNotif: E_WargaNotification = {
+              id: `${Date.now()}-${Math.random()}`,
+              title: `🎉 Dokumen Disetujui ${approver}!`,
+              message: `Surat Pengantar "${currentSurat.jenis_surat}" untuk keperluan "${currentSurat.keperluan || 'Administrasi'}" telah disetujui oleh ${approver}. ${details}`,
+              timestamp: new Date().toLocaleTimeString('id-ID', { hour: '2-digit', minute: '2-digit' }),
+              read: false,
+              suratId: currentSurat.id,
+              type: 'success'
+            };
+
+            setNotifications(prev => {
+              const updated = [newNotif, ...prev];
+              localStorage.setItem('e_warga_notifications', JSON.stringify(updated));
+              return updated;
+            });
+
+            // Browser Notification if supported and permitted
+            if ('Notification' in window && Notification.permission === 'granted') {
+              try {
+                new Notification(newNotif.title, { body: newNotif.message });
+              } catch (e) {
+                console.warn('Web notification blocked:', e);
+              }
+            }
+          } else if (isRejectedTransition) {
+            const rejecter = currentSurat.status === 'ditolak_rt' ? 'Ketua RT' : 'Ketua RW';
+            const reason = currentSurat.status === 'ditolak_rt' ? currentSurat.catatan_rt : currentSurat.catatan_rw;
+            const newNotif: E_WargaNotification = {
+              id: `${Date.now()}-${Math.random()}`,
+              title: `⚠️ Dokumen Ditangguhkan / Ditolak oleh ${rejecter}`,
+              message: `Pengajuan "${currentSurat.jenis_surat}" Anda ditangguhkan di tingkat ${rejecter}. Catatan: "${reason || 'Berkas tidak lengkap/salah isi'}"`,
+              timestamp: new Date().toLocaleTimeString('id-ID', { hour: '2-digit', minute: '2-digit' }),
+              read: false,
+              suratId: currentSurat.id,
+              type: 'alert'
+            };
+
+            setNotifications(prev => {
+              const updated = [newNotif, ...prev];
+              localStorage.setItem('e_warga_notifications', JSON.stringify(updated));
+              return updated;
+            });
+
+            // Browser Notification if supported and permitted
+            if ('Notification' in window && Notification.permission === 'granted') {
+              try {
+                new Notification(newNotif.title, { body: newNotif.message });
+              } catch (e) {
+                console.warn('Web notification blocked:', e);
+              }
+            }
+          }
+        }
+      });
+    }
+    // Sync the ref
+    prevSuratListRef.current = JSON.parse(JSON.stringify(suratList));
+  }, [suratList]);
 
   const triggerFeedback = (type: 'success' | 'error', message: string) => {
     setFeedback({ type, message });
@@ -719,6 +1061,11 @@ export default function App() {
       warga_rt: wargaUser.rt,
       warga_rw: wargaUser.rw,
       warga_no_wa: wargaUser.no_wa,
+      warga_provinsi: wargaUser.provinsi || 'JAWA BARAT',
+      warga_kabupaten: wargaUser.kabupaten || 'Kota Bandung',
+      warga_kecamatan: wargaUser.kecamatan || 'Coblong',
+      warga_kelurahan: wargaUser.kelurahan || 'Dago',
+      warga_kampung: wargaUser.kampung || '',
       jenis_surat: newSuratForm.jenis_surat,
       keperluan: newSuratForm.keperluan,
       status: 'menunggu_rt',
@@ -868,6 +1215,10 @@ export default function App() {
     } else {
       triggerFeedback('success', `Dokumen berhasil disetujui & dialihkan oleh ${currentRole.toUpperCase()} (Sandbox Mode)!`);
     }
+    setActingSuratId(null);
+    setActionType(null);
+    setFormCustomNo('');
+    setFormComment('');
   };
 
   // Reject operation (RT / RW)
@@ -932,6 +1283,10 @@ export default function App() {
     } else {
       triggerFeedback('success', `Pengajuan berhasil didokumentasikan sebagai ditolak oleh ${currentRole.toUpperCase()} (Sandbox Mode)`);
     }
+    setActingSuratId(null);
+    setActionType(null);
+    setFormCustomNo('');
+    setFormComment('');
   };
 
   // Reset simulator
@@ -1016,6 +1371,7 @@ export default function App() {
       no_wa: registerForm.no_wa.trim() || '08123456789',
       role: registerForm.role,
       status_verifikasi: 'pending',
+      provinsi: registerForm.provinsi,
       kecamatan: registerForm.kecamatan,
       kelurahan: registerForm.kelurahan,
       kabupaten: registerForm.kabupaten,
@@ -1048,6 +1404,7 @@ export default function App() {
               rw: registerForm.rw,
               no_wa: registerForm.no_wa.trim() || '08123456789',
               role: registerForm.role,
+              provinsi: registerForm.provinsi,
               kabupaten: registerForm.kabupaten,
               kecamatan: registerForm.kecamatan,
               kelurahan: registerForm.kelurahan,
@@ -1085,9 +1442,10 @@ export default function App() {
       file_kk: '',
       ktpSize: 0,
       kkSize: 0,
-      kecamatan: 'Coblong',
-      kelurahan: 'Dago',
-      kabupaten: 'Kota Bandung',
+      provinsi: useLiveApi ? registerForm.provinsi : 'JAWA BARAT',
+      kecamatan: useLiveApi ? registerForm.kecamatan : 'Coblong',
+      kelurahan: useLiveApi ? registerForm.kelurahan : 'Dago',
+      kabupaten: useLiveApi ? registerForm.kabupaten : 'Kota Bandung',
       kampung: ''
     });
   };
@@ -1155,62 +1513,224 @@ export default function App() {
   };
 
   return (
-    <div className="min-h-screen bg-slate-50 text-slate-800 flex flex-col font-sans">
+    <div className={`min-h-screen flex flex-col font-sans transition-colors duration-250 ${isDarkMode ? 'dark bg-[#090d16] text-[#e2e8f0]' : 'bg-slate-50 text-slate-800'}`}>
       
       {/* 1. TOP HEADER BRAND */}
       <header className="border-b border-slate-200 bg-white sticky top-0 z-40 shadow-sm">
         <div className="max-w-7xl mx-auto px-4 py-3 sm:px-6 lg:px-8 flex flex-col md:flex-row md:items-center justify-between gap-4">
           
           <div className="flex items-center gap-3">
-            <div className="p-2.5 bg-emerald-600 text-white rounded-xl shadow-md shadow-emerald-200">
-              <FileCheck className="w-6 h-6" />
+            <div className="p-2.5 bg-gradient-to-br from-emerald-500 to-teal-600 text-white rounded-xl shadow-md shadow-emerald-250 flex items-center justify-center">
+              <svg className="w-6 h-6" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
+                <path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"/>
+                <path d="M9 11l2 2 4-4"/>
+              </svg>
             </div>
             <div>
-              <div className="flex items-center gap-2">
-                <h1 className="text-xl font-extrabold tracking-tight text-slate-900">E-WARGA</h1>
-                <span className="text-[10px] uppercase font-bold text-purple-700 bg-purple-50 border border-purple-200 px-1.5 py-0.5 rounded">
-                  Monorepo v2.0 (Tasikmalaya Live)
+              <div className="flex items-center gap-2 flex-wrap">
+                <h1 className="text-xl font-black tracking-tight text-slate-900 font-sans flex items-center gap-1.5">
+                  E-WARGA
+                </h1>
+                <span className="text-[9px] font-extrabold uppercase text-emerald-800 bg-emerald-50 border border-emerald-200 px-2 py-0.5 rounded-md tracking-wider">
+                  Verified Local
                 </span>
+                <span className="text-[10px] font-bold text-slate-400">
+                  by Arblok Digital
+                </span>
+                <div className="flex items-center gap-1 bg-slate-50 p-1.5 rounded-xl border border-slate-200/60 ml-2">
+                  <span className="text-[9.5px] font-black text-slate-400 uppercase tracking-widest px-1">Tema:</span>
+                  <button
+                    type="button"
+                    onClick={() => setAppTheme('emerald')}
+                    className={`w-3.5 h-3.5 rounded-full bg-emerald-500 hover:scale-110 active:scale-95 transition cursor-pointer ${appTheme === 'emerald' ? 'ring-2 ring-slate-700 ring-offset-1 scale-110' : 'opacity-70 shadow-xs'}`}
+                    title="Hijau Desa"
+                  />
+                  <button
+                    type="button"
+                    onClick={() => setAppTheme('ocean')}
+                    className={`w-3.5 h-3.5 rounded-full bg-blue-500 hover:scale-110 active:scale-95 transition cursor-pointer ${appTheme === 'ocean' ? 'ring-2 ring-slate-700 ring-offset-1 scale-110' : 'opacity-70 shadow-xs'}`}
+                    title="Biru Samudra"
+                  />
+                  <button
+                    type="button"
+                    onClick={() => setAppTheme('twilight')}
+                    className={`w-3.5 h-3.5 rounded-full bg-purple-500 hover:scale-110 active:scale-95 transition cursor-pointer ${appTheme === 'twilight' ? 'ring-2 ring-slate-700 ring-offset-1 scale-110' : 'opacity-70 shadow-xs'}`}
+                    title="Violet Senja"
+                  />
+                  <button
+                    type="button"
+                    onClick={() => setAppTheme('sunrise')}
+                    className={`w-3.5 h-3.5 rounded-full bg-orange-500 hover:scale-110 active:scale-95 transition cursor-pointer ${appTheme === 'sunrise' ? 'ring-2 ring-slate-700 ring-offset-1 scale-110' : 'opacity-70 shadow-xs'}`}
+                    title="Sunset Hangat"
+                  />
+                  <div className="h-4 w-px bg-slate-200 mx-1" />
+                  <button
+                    type="button"
+                    onClick={() => setIsDarkMode(!isDarkMode)}
+                    className="p-1 rounded-md text-slate-400 hover:text-slate-600 transition active:scale-95 cursor-pointer flex items-center justify-center"
+                    title={isDarkMode ? 'Mode Terang' : 'Mode Gelap'}
+                  >
+                    {isDarkMode ? <Sun className="w-3.5 h-3.5 text-amber-500" /> : <Moon className="w-3.5 h-3.5 text-slate-500" />}
+                  </button>
+                </div>
               </div>
-              <p className="text-xs text-slate-500 font-semibold text-slate-600">Sistem Pengantar Surat RT, RW & Kecamatan Terintegrasi (Kabupaten Tasikmalaya Aktif!)</p>
+              <p className="text-xs text-slate-500 font-medium">Sistem Informasi Pengantar Surat RT/RW & Layanan Administrasi Mandiri</p>
             </div>
           </div>
 
-          {/* Core Navigation Panels */}
-          <div className="flex items-center gap-1.5 bg-slate-100 p-1 rounded-xl">
-            <button
-              onClick={() => setActiveTab('simulation')}
-              className={`flex items-center gap-2 px-3 py-1.5 md:px-3.5 py-1.5 text-xs font-semibold rounded-lg transition-all ${
-                activeTab === 'simulation'
-                  ? 'bg-white text-emerald-800 shadow-sm'
-                  : 'text-slate-600 hover:text-slate-900'
-              }`}
-            >
-              <Smartphone className="w-3.5 h-3.5" />
-              Simulasi PWA
-            </button>
-            <button
-              onClick={() => setActiveTab('registration_portal')}
-              className={`flex items-center gap-2 px-3 py-1.5 md:px-3.5 py-1.5 text-xs font-semibold rounded-lg transition-all ${
-                activeTab === 'registration_portal'
-                  ? 'bg-white text-purple-800 shadow-sm'
-                  : 'text-slate-600 hover:text-slate-900'
-              }`}
-            >
-              <Fingerprint className="w-3.5 h-3.5 text-purple-600" />
-              Portal Registrasi E-Warga
-            </button>
-            <button
-              onClick={() => setActiveTab('dev_console')}
-              className={`flex items-center gap-2 px-3 py-1.5 md:px-3.5 py-1.5 text-xs font-semibold rounded-lg transition-all ${
-                activeTab === 'dev_console'
-                  ? 'bg-white text-slate-800 shadow-sm animate-pulse'
-                  : 'text-slate-600 hover:text-slate-900'
-              }`}
-            >
-              <Database className="w-3.5 h-3.5 text-blue-600" />
-              Supabase Integrasi & SQL Setup
-            </button>
+          {/* Core Navigation Panels & Realtime Notification Center */}
+          <div className="flex items-center gap-3">
+            <div className="flex items-center gap-1.5 bg-slate-100 p-1.5 rounded-2xl shadow-inner border border-slate-200/50 flex-wrap">
+              <button
+                onClick={() => setActiveTab('simulation')}
+                className={`flex items-center gap-2 px-3.5 py-2 text-xs font-black rounded-xl transition-all duration-150 active:scale-95 cursor-pointer ${
+                  activeTab === 'simulation'
+                    ? 'bg-emerald-600 text-white shadow-md shadow-emerald-250 border-b-2 border-emerald-800'
+                    : 'text-slate-600 hover:bg-slate-50'
+                }`}
+              >
+                <Smartphone className="w-3.5 h-3.5" />
+                Simulasi PWA
+              </button>
+              <button
+                onClick={() => setActiveTab('registration_portal')}
+                className={`flex items-center gap-2 px-3.5 py-2 text-xs font-black rounded-xl transition-all duration-150 active:scale-95 cursor-pointer ${
+                  activeTab === 'registration_portal'
+                    ? 'bg-purple-600 text-white shadow-md shadow-purple-250 border-b-2 border-purple-800'
+                    : 'text-slate-600 hover:bg-slate-50'
+                }`}
+              >
+                <Fingerprint className="w-3.5 h-3.5 text-purple-200" />
+                Portal Registrasi
+              </button>
+              <button
+                onClick={() => setActiveTab('chat_siskamling')}
+                className={`flex items-center gap-2 px-3.5 py-2 text-xs font-black rounded-xl transition-all duration-150 active:scale-95 cursor-pointer ${
+                  activeTab === 'chat_siskamling'
+                    ? 'bg-rose-600 text-white shadow-md shadow-rose-250 border-b-2 border-rose-800'
+                    : 'text-slate-600 hover:bg-slate-50'
+                }`}
+              >
+                <MessageSquare className="w-3.5 h-3.5 text-rose-200" />
+                Siskamling Chat
+              </button>
+              <button
+                onClick={() => setActiveTab('dev_console')}
+                className={`flex items-center gap-2 px-3.5 py-2 text-xs font-black rounded-xl transition-all duration-150 active:scale-95 cursor-pointer ${
+                  activeTab === 'dev_console'
+                    ? 'bg-blue-600 text-white shadow-md shadow-blue-250 border-b-2 border-blue-800'
+                    : 'text-slate-600 hover:bg-slate-50'
+                }`}
+              >
+                <Database className="w-3.5 h-3.5" />
+                Database Setup
+              </button>
+            </div>
+
+            {/* Realtime Notification Bell Dropdown */}
+            <div className="relative">
+              <button
+                type="button"
+                onClick={() => setShowNotifDropdown(!showNotifDropdown)}
+                className={`p-2.5 rounded-xl border border-slate-200 bg-white hover:bg-slate-50 transition active:scale-95 relative cursor-pointer flex items-center justify-center text-slate-600 ${showNotifDropdown ? 'ring-2 ring-emerald-500 bg-slate-50' : 'shadow-xs'}`}
+                title="Pusat Pemberitahuan Dokumen"
+              >
+                <Bell className={`w-5 h-5 ${notifications.some(n => !n.read) ? 'text-amber-500 animate-bounce' : 'text-slate-500'}`} />
+                {notifications.some(n => !n.read) && (
+                  <span className="absolute -top-1 -right-1 flex h-4 w-4">
+                    <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-red-400 opacity-75"></span>
+                    <span className="relative inline-flex rounded-full h-4 w-4 bg-red-500 text-[9px] font-black text-white items-center justify-center">
+                      {notifications.filter(n => !n.read).length}
+                    </span>
+                  </span>
+                )}
+              </button>
+
+              {showNotifDropdown && (
+                <div id="notif-dropdown-box" className="absolute right-0 mt-3.5 w-80 sm:w-96 bg-white rounded-2xl border border-slate-200 shadow-xl overflow-hidden z-50 animate-in fade-in slide-in-from-top-3 duration-250">
+                  <div className="p-4 bg-gradient-to-r from-slate-950 to-slate-900 text-white flex items-center justify-between">
+                    <div>
+                      <h3 className="text-xs font-black tracking-widest text-emerald-400 uppercase">PUSAT NOTIFIKASI</h3>
+                      <p className="text-[10px] text-slate-300 font-medium font-sans">Status Surat & Layanan Mandiri</p>
+                    </div>
+                    <div className="flex items-center gap-1.5">
+                      {notifications.length > 0 && (
+                        <button
+                          type="button"
+                          onClick={() => {
+                            const updated = notifications.map(n => ({ ...n, read: true }));
+                            setNotifications(updated);
+                            localStorage.setItem('e_warga_notifications', JSON.stringify(updated));
+                            triggerFeedback('success', 'Semua notifikasi ditandai telah dibaca.');
+                          }}
+                          className="text-[9px] font-bold bg-slate-800 hover:bg-slate-700 text-slate-200 px-2 py-1 rounded-md transition cursor-pointer"
+                        >
+                          Dibaca
+                        </button>
+                      )}
+                      <button
+                        type="button"
+                        onClick={() => {
+                          setNotifications([]);
+                          localStorage.removeItem('e_warga_notifications');
+                          triggerFeedback('success', 'History notifikasi dibersihkan.');
+                        }}
+                        className="text-[9px] font-bold bg-rose-950/50 hover:bg-rose-900 border border-rose-900/60 text-rose-200 px-2 py-1 rounded-md transition cursor-pointer"
+                      >
+                        Hapus
+                      </button>
+                    </div>
+                  </div>
+
+                  <div className="max-h-[360px] overflow-y-auto divide-y divide-slate-100 font-sans">
+                    {notifications.length === 0 ? (
+                      <div className="p-8 text-center space-y-2">
+                        <div className="w-12 h-12 bg-slate-50 border border-slate-200 rounded-full flex items-center justify-center mx-auto text-slate-400">
+                          <Bell className="w-5 h-5 opacity-40" />
+                        </div>
+                        <p className="text-xs font-bold text-slate-600">Semua Dokumen Aman Kondusif</p>
+                        <p className="text-[10px] text-slate-400 max-w-[240px] mx-auto">Saat RT, RW, atau Kecamatan menyetujui surat pengantar Anda, pembaruan real-time akan langsung muncul di sini!</p>
+                      </div>
+                    ) : (
+                      notifications.map(notif => (
+                        <div 
+                          key={notif.id} 
+                          onClick={() => {
+                            // Mark as read
+                            const updated = notifications.map(n => n.id === notif.id ? { ...n, read: true } : n);
+                            setNotifications(updated);
+                            localStorage.setItem('e_warga_notifications', JSON.stringify(updated));
+                          }}
+                          className={`p-3.5 hover:bg-slate-50 transition flex gap-3 cursor-pointer items-start ${!notif.read ? 'bg-slate-50/50 border-l-2 border-emerald-500' : ''}`}
+                        >
+                          <div className={`p-2 rounded-xl mt-0.5 flex-shrink-0 ${notif.type === 'success' ? 'bg-emerald-50 text-emerald-600 border border-emerald-200/50' : 'bg-rose-50 text-rose-600 border border-rose-200/50'}`}>
+                            {notif.type === 'success' ? <CheckCircle className="w-4 h-4" /> : <AlertTriangle className="w-4 h-4 text-rose-600" />}
+                          </div>
+                          <div className="space-y-1 flex-1">
+                            <div className="flex justify-between items-start gap-2">
+                              <h4 className="text-xs font-bold text-slate-800 leading-tight">{notif.title}</h4>
+                              <span className="text-[8.5px] font-mono text-slate-400 whitespace-nowrap">{notif.timestamp}</span>
+                            </div>
+                            <p className="text-[10.5px] text-slate-500 leading-relaxed font-sans">{notif.message}</p>
+                            {!notif.read && (
+                              <span className="inline-flex items-center gap-1 text-[8.5px] font-semibold text-emerald-600 bg-emerald-50 border border-emerald-100 px-1.5 py-0.5 rounded mt-1 uppercase tracking-wider">
+                                Baru ●
+                              </span>
+                            )}
+                          </div>
+                        </div>
+                      ))
+                    )}
+                  </div>
+
+                  <div className="p-3 bg-slate-50 border-t border-slate-100 text-center text-[9px] font-mono text-slate-400 flex items-center justify-between px-4">
+                    <span>📡 PWA Web Push Active</span>
+                    <span>E-Warga Live Sync</span>
+                  </div>
+                </div>
+              )}
+            </div>
+
           </div>
 
         </div>
@@ -1223,7 +1743,146 @@ export default function App() {
           100% { transform: translateX(-100%); }
         }
         .animate-marquee-scroll {
-          animation: marquee_scroll 35s linear infinite;
+          animation: marquee_scroll 60s linear infinite;
+        }
+
+        /* DYNAMIC THEME INJECTIONS */
+        ${appTheme === 'ocean' ? `
+          .bg-emerald-600 { background-color: #2563eb !important; }
+          .hover\\:bg-emerald-700:hover { background-color: #1d4ed8 !important; }
+          .text-emerald-800 { color: #1e3a8a !important; }
+          .text-emerald-600 { color: #2563eb !important; }
+          .bg-emerald-50 { background-color: #eff6ff !important; }
+          .bg-emerald-100 { background-color: #dbeafe !important; }
+          .border-emerald-200 { border-color: #bfdbfe !important; }
+          .shadow-emerald-250 { --tw-shadow-color: rgba(37, 99, 235, 0.25) !important; }
+          .from-emerald-500 { --tw-gradient-from: #3b82f6 !important; --tw-gradient-to: rgb(59 130 246 / 0) !important; --tw-gradient-stops: var(--tw-gradient-from), var(--tw-gradient-to) !important; }
+          .to-teal-600 { --tw-gradient-to: #0369a1 !important; }
+          .text-emerald-650 { color: #1d4ed8 !important; }
+          .border-emerald-100 { border-color: #dbeafe !important; }
+        ` : ''}
+
+        ${appTheme === 'twilight' ? `
+          .bg-emerald-600 { background-color: #7c3aed !important; }
+          .hover\\:bg-emerald-700:hover { background-color: #6d28d9 !important; }
+          .text-emerald-800 { color: #5b21b6 !important; }
+          .text-emerald-600 { color: #7c3aed !important; }
+          .bg-emerald-50 { background-color: #f5f3ff !important; }
+          .bg-emerald-100 { background-color: #ede9fe !important; }
+          .border-emerald-200 { border-color: #ddd6fe !important; }
+          .shadow-emerald-250 { --tw-shadow-color: rgba(124, 58, 237, 0.25) !important; }
+          .from-emerald-500 { --tw-gradient-from: #8b5cf6 !important; --tw-gradient-to: rgb(139 92 246 / 0) !important; --tw-gradient-stops: var(--tw-gradient-from), var(--tw-gradient-to) !important; }
+          .to-teal-600 { --tw-gradient-to: #db2777 !important; }
+          .text-emerald-650 { color: #7c3aed !important; }
+          .border-emerald-105 { border-color: #ede9fe !important; }
+        ` : ''}
+
+        ${appTheme === 'sunrise' ? `
+          .bg-emerald-600 { background-color: #ea580c !important; }
+          .hover\\:bg-emerald-700:hover { background-color: #c2410c !important; }
+          .text-emerald-800 { color: #9a3412 !important; }
+          .text-emerald-600 { color: #ea580c !important; }
+          .bg-emerald-50 { background-color: #fff7ed !important; }
+          .bg-emerald-100 { background-color: #ffedd5 !important; }
+          .border-emerald-200 { border-color: #fed7aa !important; }
+          .shadow-emerald-250 { --tw-shadow-color: rgba(234, 88, 12, 0.25) !important; }
+          .from-emerald-500 { --tw-gradient-from: #f97316 !important; --tw-gradient-to: rgb(249 115 22 / 0) !important; --tw-gradient-stops: var(--tw-gradient-from), var(--tw-gradient-to) !important; }
+          .to-teal-600 { --tw-gradient-to: #e11d48 !important; }
+          .text-emerald-650 { color: #ea580c !important; }
+          .border-emerald-100 { border-color: #ffedd5 !important; }
+        ` : ''}
+
+        /* DARK MODE DYNAMIC OVERRIDES */
+        .dark {
+          background-color: #090d16 !important;
+          color: #f1f5f9 !important;
+        }
+
+        .dark header.bg-white, .dark header {
+          background-color: #0f1322 !important;
+          border-color: #1e293b !important;
+        }
+
+        .dark .bg-white {
+          background-color: #131926 !important;
+          border-color: #1e293b !important;
+          color: #f1f5f9 !important;
+        }
+
+        .dark .bg-slate-50, .dark .bg-slate-50\\/40 {
+          background-color: #090d16 !important;
+          border-color: #1e293b !important;
+          color: #cbd5e1 !important;
+        }
+
+        .dark .bg-slate-100 {
+          background-color: #0f1322 !important;
+          color: #cbd5e1 !important;
+        }
+
+        .dark .text-slate-900, .dark .text-slate-800, .dark .text-slate-700, .dark h1, .dark h2, .dark h3, .dark h4 {
+          color: #f8fafc !important;
+        }
+
+        .dark .text-slate-600, .dark .text-slate-500, .dark p {
+          color: #94a3b8 !important;
+        }
+
+        .dark .border-slate-100, .dark .border-slate-200, .dark .border-slate-200\\/50, .dark .border-slate-200\\/60, .dark .border-slate-250\\/50 {
+          border-color: #1e293b !important;
+        }
+
+        .dark input, .dark select, .dark textarea {
+          background-color: #090d16 !important;
+          border-color: #1e293b !important;
+          color: #f8fafc !important;
+        }
+
+        .dark input::placeholder, .dark textarea::placeholder {
+          color: #475569 !important;
+        }
+
+        .dark .hover\\:bg-slate-50:hover, .dark .hover\\:bg-slate-100:hover, .dark .hover\\:bg-slate-50\\/80:hover {
+          background-color: #1c2333 !important;
+          color: #f8fafc !important;
+        }
+
+        /* Specific styles for notification center */
+        .dark #notif-dropdown-box {
+          background-color: #131926 !important;
+          border-color: #1e293b !important;
+          box-shadow: 0 20px 25px -5px rgb(0 0 0 / 0.5), 0 8px 10px -6px rgb(0 0 0 / 0.5) !important;
+        }
+
+        .dark #notif-dropdown-box .divide-y > * {
+          border-color: #1e293b !important;
+        }
+
+        .dark #notif-dropdown-box .bg-slate-50 {
+          background-color: #0f1322 !important;
+        }
+
+        .dark #notif-dropdown-box .text-slate-800 {
+          color: #f8fafc !important;
+        }
+
+        .dark #notif-dropdown-box .text-slate-500 {
+          color: #94a3b8 !important;
+        }
+
+        /* Nav lists buttons */
+        .dark .bg-slate-100 button:not(.bg-emerald-600):not(.bg-purple-600):not(.bg-rose-600):not(.bg-blue-600) {
+          color: #94a3b8 !important;
+        }
+        
+        .dark .bg-slate-100 button:hover {
+          background-color: #1e293b !important;
+        }
+
+        /* Tab background */
+        .dark .bg-slate-100.p-1.5 {
+          background-color: #090d16 !important;
+          border-color: #1e293b !important;
         }
       `}</style>
 
@@ -1284,7 +1943,7 @@ export default function App() {
       )}
 
       {/* 2. CORE CONTAINER */}
-      <main className="flex-1 max-w-7xl mx-auto px-4 py-6 sm:px-6 lg:px-8 w-full flex flex-col gap-6">
+      <main className="flex-1 max-w-7xl mx-auto px-4 pt-6 pb-24 md:pb-12 sm:px-6 lg:px-8 w-full flex flex-col gap-6">
 
         {/* ==================== TAB 1: WORKSPACE SIMULATION ==================== */}
         {activeTab === 'simulation' && (
@@ -1376,11 +2035,14 @@ export default function App() {
                         <div className="text-xs space-y-1 text-slate-600 bg-slate-50 p-2.5 rounded-lg border border-slate-150">
                           <p>🏠 <span className="font-medium">Alamat:</span> {currentProfile.alamat}</p>
                           {(currentProfile.kabupaten || currentProfile.kecamatan || currentProfile.kelurahan) && (
-                            <p className="text-[10px] bg-purple-50 text-purple-950 px-2 py-1 rounded border border-purple-100 flex flex-wrap gap-1 mt-1 font-semibold">
-                              <span>🗺️ {currentProfile.kabupaten || '-'}</span> | 
-                              <span>{currentProfile.kecamatan || '-'}</span> | 
+                            <p className="text-[10px] bg-purple-50 text-purple-950 px-2 py-1 rounded border border-purple-100 flex flex-wrap gap-1 mt-1 font-semibold items-center">
+                              {currentProfile.provinsi && <span>🌐 {currentProfile.provinsi}</span>}
+                              {currentProfile.provinsi && <span className="text-purple-300">|</span>}
+                              <span>🗺️ {currentProfile.kabupaten || '-'}</span> <span className="text-purple-300">|</span>
+                              <span>{currentProfile.kecamatan || '-'}</span> <span className="text-purple-300">|</span>
                               <span>{currentProfile.kelurahan || '-'}</span>
-                              {currentProfile.kampung && <span> | {currentProfile.kampung}</span>}
+                              {currentProfile.kampung && <span className="text-purple-300">|</span>}
+                              {currentProfile.kampung && <span>{currentProfile.kampung}</span>}
                             </p>
                           )}
                           <p>📍 <span className="font-medium">RT / RW:</span> {currentProfile.rt} / {currentProfile.rw}</p>
@@ -1646,34 +2308,48 @@ export default function App() {
                   </div>
                 </>
               ) : (
-                <div className="bg-white rounded-2xl border border-slate-200 p-5 shadow-sm flex flex-col gap-4">
-                  <h4 className="font-extrabold text-slate-900 text-xs uppercase tracking-wider text-slate-400">Panduan Operasional</h4>
-                  <div className="space-y-3.5 text-xs text-slate-600">
-                    <div className="flex gap-2.5">
-                      <div className="p-1.5 bg-indigo-50 text-indigo-600 rounded-lg shrink-0">
-                        <Info className="w-4 h-4" />
-                      </div>
-                      <p>Sebagai <span className="font-semibold">{currentRole === 'rt' ? 'Ketua RT' : 'Ketua RW'}</span>, Anda dapat memvalidasi dokumen yang masuk dengan membubuhkan nomor surat pengantar resmi.</p>
-                    </div>
-
-                    <div className="flex gap-2.5">
-                      <div className="p-1.5 bg-amber-50 text-amber-600 rounded-lg shrink-0">
-                        <Phone className="w-4 h-4" />
-                      </div>
-                      <p>Kirim langsung notifikasi WhatsApp gratis (Click-to-chat) ke warga untuk memberi tahu hasil keputusan persetujuan/penolakan dokumen.</p>
-                    </div>
-
-                    <div className="bg-slate-50 border border-slate-100 rounded-xl p-3">
-                      <p className="font-mono text-[11px] text-slate-500 font-bold mb-1.5">Urutan Alur Dokumen:</p>
-                      <ul className="space-y-1 text-[11px] list-decimal list-inside text-slate-500">
-                        <li>Warga buat permohonan</li>
-                        <li>Masuk RT (Status: <code>menunggu_rt</code>)</li>
-                        <li>Disetujui RT (Status: <code>menunggu_rw</code>)</li>
-                        <li>Disetujui RW (Status: <code>siap_diambil</code>)</li>
-                        <li>Warga ambil & mark Selesai</li>
-                      </ul>
-                    </div>
+                <div className="bg-white rounded-2xl border border-slate-200 p-5 shadow-sm flex flex-col gap-3">
+                  <div className="flex justify-between items-center">
+                    <h4 className="font-extrabold text-slate-900 text-xs uppercase tracking-wider text-slate-400">Panduan Operasional</h4>
+                    <button
+                      type="button"
+                      onClick={() => setShowRtRwGuide(!showRtRwGuide)}
+                      className="text-[10px] text-purple-600 hover:text-purple-900 bg-purple-50 hover:bg-purple-100 px-2.5 py-1 rounded-lg transition font-mono font-bold"
+                    >
+                      {showRtRwGuide ? 'Tutup ✕' : 'Buka ℹ️'}
+                    </button>
                   </div>
+                  
+                  {showRtRwGuide ? (
+                    <div className="space-y-3.5 text-xs text-slate-600 pt-2 border-t border-slate-100">
+                      <div className="flex gap-2.5">
+                        <div className="p-1.5 bg-indigo-50 text-indigo-600 rounded-lg shrink-0">
+                          <Info className="w-4 h-4" />
+                        </div>
+                        <p>Sebagai <span className="font-semibold">{currentRole === 'rt' ? 'Ketua RT' : 'Ketua RW'}</span>, Anda dapat memvalidasi dokumen yang masuk dengan membubuhkan nomor surat pengantar resmi.</p>
+                      </div>
+
+                      <div className="flex gap-2.5">
+                        <div className="p-1.5 bg-amber-50 text-amber-600 rounded-lg shrink-0">
+                          <Phone className="w-4 h-4" />
+                        </div>
+                        <p>Kirim langsung notifikasi WhatsApp gratis (Click-to-chat) ke warga untuk memberi tahu hasil keputusan persetujuan/penolakan dokumen.</p>
+                      </div>
+
+                      <div className="bg-slate-50 border border-slate-100 rounded-xl p-3">
+                        <p className="font-mono text-[11px] text-slate-500 font-bold mb-1.5">Urutan Alur Dokumen:</p>
+                        <ul className="space-y-1 text-[11px] list-decimal list-inside text-slate-500">
+                          <li>Warga buat permohonan</li>
+                          <li>Masuk RT (Status: <code>menunggu_rt</code>)</li>
+                          <li>Disetujui RT (Status: <code>menunggu_rw</code>)</li>
+                          <li>Disetujui RW (Status: <code>siap_diambil</code>)</li>
+                          <li>Warga ambil & mark Selesai</li>
+                        </ul>
+                      </div>
+                    </div>
+                  ) : (
+                    <p className="text-[11px] text-slate-400 italic">Panduan operasional disembunyikan agar UI tetap bersih. Klik tombol di kanan untuk membuka.</p>
+                  )}
                 </div>
               )}
 
@@ -1818,6 +2494,20 @@ export default function App() {
                            </div>
                          )}
 
+                         {/* Cetak Surat Pengantar Button (Hanya tampil jika sudah disetujui RT / RW) */}
+                         {(surat.nomor_surat_rt || surat.nomor_surat_rw) && (
+                           <div className="pt-1">
+                             <button
+                               type="button"
+                               onClick={() => setPrintingSurat(surat)}
+                               className="w-full bg-slate-50 dark:bg-[#111625] hover:bg-slate-100 dark:hover:bg-[#1b2234] text-slate-700 dark:text-slate-300 font-extrabold text-xs px-3.5 py-3 rounded-xl border border-slate-200 dark:border-slate-800 flex items-center justify-center gap-1.5 transition duration-150 cursor-pointer shadow-xs mb-3"
+                             >
+                               <Printer className="w-4 h-4 text-indigo-650 dark:text-indigo-400 font-bold" />
+                               <span>Pratinjau & Cetak Surat Pengantar Resmi (Kop Surat)</span>
+                             </button>
+                           </div>
+                         )}
+
                          {/* ACTION PANELS DEPENDING ON ACTIVE ROLE */}
                          <div className="pt-3 border-t border-slate-100 flex flex-wrap gap-2 items-center justify-between">
                            
@@ -1875,25 +2565,28 @@ export default function App() {
                                  {canApprove ? (
                                    <>
                                      <button
+                                       type="button"
                                        onClick={() => {
-                                         const reason = prompt('Masukkan alasan penolakan berkas:');
-                                         if (reason !== null) handleReject(surat.id, reason);
+                                         setActingSuratId(surat.id);
+                                         setActionType('reject');
+                                         setFormComment('');
                                        }}
-                                       className="bg-rose-50 hover:bg-rose-100 text-rose-800 font-extrabold text-xs px-3.5 py-2 rounded-lg border border-rose-200 transition"
+                                       className="bg-rose-50 dark:bg-[#2c131a] hover:bg-rose-100 dark:hover:bg-[#3d1a24] text-rose-850 dark:text-rose-300 font-extrabold text-xs px-3.5 py-2 rounded-lg border border-rose-200 dark:border-rose-900/60 transition cursor-pointer"
                                      >
                                        Tolak Berkas
                                      </button>
 
                                      <button
+                                       type="button"
                                        onClick={() => {
                                          const prefix = currentRole === 'rt' ? 'RT-03' : 'RW-04';
-                                         const customNo = prompt(`Masukkan nomor surat resmi ${currentRole.toUpperCase()} (atau kosongkan untuk auto):`, `PM/0${Math.floor(Math.random() * 90) + 10}/${prefix}/VI/2026`);
-                                         if (customNo !== null) {
-                                           const comment = prompt('Catatan tambahan (opsional):') || '';
-                                           handleApprove(surat.id, customNo, comment);
-                                         }
+                                         const randomNo = `PM/0${Math.floor(Math.random() * 90) + 10}/${prefix}/VI/2026`;
+                                         setActingSuratId(surat.id);
+                                         setActionType('approve');
+                                         setFormCustomNo(randomNo);
+                                         setFormComment('');
                                        }}
-                                       className="bg-emerald-600 hover:bg-emerald-700 text-white font-extrabold text-xs px-4 py-2 rounded-lg shadow transition"
+                                       className="bg-emerald-600 hover:bg-emerald-700 text-white font-extrabold text-xs px-4 py-2 rounded-lg shadow transition cursor-pointer"
                                      >
                                        Setujui & Tandatangani
                                      </button>
@@ -1903,6 +2596,77 @@ export default function App() {
                                  )}
                                </div>
 
+                             </div>
+                           )}
+
+                           {/* INLINE ACTION FORM FOR IFRAME SANDBOX COMPATIBILITY */}
+                           {actingSuratId === surat.id && actionType && (
+                             <div className="mt-3 p-4 bg-slate-50 dark:bg-[#0c101d] border border-slate-200 dark:border-slate-800 rounded-xl space-y-3 shadow-inner text-left w-full animate-in fade-in slide-in-from-top-2 duration-200">
+                               <h5 className="font-extrabold text-xs uppercase tracking-wider text-slate-500 dark:text-slate-400 flex items-center gap-1.5">
+                                 {actionType === 'approve' ? (
+                                   <>✍️ Formulir Setujui & Berikan Tanda Tangan ({currentRole.toUpperCase()})</>
+                                 ) : (
+                                   <>❌ Formulir Alasan Penolakan Berkas ({currentRole.toUpperCase()})</>
+                                 )}
+                               </h5>
+
+                               {actionType === 'approve' && (
+                                 <div className="space-y-1 text-left">
+                                   <label className="text-[11px] font-bold text-slate-600 dark:text-slate-400 block block text-left">Nomor Surat Resmi:</label>
+                                   <input 
+                                     type="text" 
+                                     value={formCustomNo}
+                                     onChange={(e) => setFormCustomNo(e.target.value)}
+                                     className="w-full text-xs p-2 rounded-lg border border-slate-200 dark:border-slate-800 bg-white dark:bg-[#111625] text-slate-900 dark:text-slate-100 placeholder-slate-450"
+                                     placeholder="Format: PM/xxx/RT-03/VI/2026"
+                                   />
+                                 </div>
+                               )}
+
+                               <div className="space-y-1 text-left">
+                                 <label className="text-[11px] font-bold text-slate-600 dark:text-slate-400 block block text-left">
+                                   {actionType === 'approve' ? 'Catatan Tambahan (Opsional):' : 'Alasan Penolakan (Wajib):'}
+                                 </label>
+                                 <textarea 
+                                   rows={2}
+                                   value={formComment}
+                                   onChange={(e) => setFormComment(e.target.value)}
+                                   className="w-full text-xs p-2 rounded-lg border border-slate-200 dark:border-slate-800 bg-white dark:bg-[#111625] text-slate-900 dark:text-slate-100 placeholder-slate-450"
+                                   placeholder={actionType === 'approve' ? 'Contoh: Berkas asli harap dibawa saat penjemputan di RW' : 'Masukkan alasan rincian penolakan berkas...'}
+                                 />
+                               </div>
+
+                               <div className="flex items-center justify-end gap-2 pt-1.5 border-t border-slate-200/50 dark:border-slate-800/50">
+                                 <button
+                                   type="button"
+                                   onClick={() => {
+                                     setActingSuratId(null);
+                                     setActionType(null);
+                                   }}
+                                   className="px-3 py-1.5 text-xs font-bold text-slate-500 hover:bg-slate-200/50 dark:hover:bg-slate-800 rounded-lg transition"
+                                 >
+                                   Batal
+                                 </button>
+                                 <button
+                                   type="button"
+                                   onClick={() => {
+                                     if (actionType === 'approve') {
+                                       handleApprove(surat.id, formCustomNo, formComment);
+                                     } else {
+                                       if (!formComment.trim()) {
+                                         triggerFeedback('error', 'Alasan penolakan / catatan wajib diisi ya bro!');
+                                         return;
+                                       }
+                                       handleReject(surat.id, formComment);
+                                     }
+                                   }}
+                                   className={`px-4 py-1.5 text-xs font-extrabold text-white rounded-lg transition shadow-xs cursor-pointer ${
+                                     actionType === 'approve' ? 'bg-emerald-600 hover:bg-emerald-700' : 'bg-rose-600 hover:bg-rose-700'
+                                   }`}
+                                 >
+                                   {actionType === 'approve' ? 'Konfirmasi Setujui' : 'Konfirmasi Tolak'}
+                                 </button>
+                               </div>
                              </div>
                            )}
 
@@ -2167,6 +2931,307 @@ export default function App() {
           </div>
         )}
 
+        {/* ==================== TAB 1.5: SISKAMLING REAL-TIME CONTROL POST ==================== */}
+        {activeTab === 'chat_siskamling' && (
+          <div className="space-y-6">
+            
+            {/* Siskamling Hub Header */}
+            <div className={`relative overflow-hidden rounded-3xl p-6 sm:p-8 border shadow-xl transition-all duration-300 ${
+              panicActive 
+                ? 'bg-gradient-to-r from-rose-950 to-red-900 border-rose-600 text-white shadow-rose-950/20 animate-pulse' 
+                : 'bg-slate-950 border-slate-800 text-white shadow-slate-900/40'
+            }`}>
+              <div className="absolute right-0 top-0 -mt-8 -mr-8 w-40 h-40 rounded-full bg-rose-600/10 blur-2xl pointer-events-none"></div>
+              
+              <div className="relative z-10 flex flex-col md:flex-row justify-between items-start md:items-center gap-6">
+                <div>
+                  <div className="flex items-center gap-2">
+                    <span className={`p-2 rounded-xl flex items-center justify-center ${panicActive ? 'bg-rose-600 text-white animate-bounce' : 'bg-slate-800 text-slate-300'}`}>
+                      <Shield className="w-5 h-5" />
+                    </span>
+                    <h2 className="text-xl sm:text-2xl font-black tracking-tight text-white">
+                      POS RONDA DIGITAL <span className="text-xs font-mono font-bold bg-rose-800 text-rose-200 border border-rose-600 px-2.5 py-0.5 rounded-full uppercase tracking-widest">Inter-RT/RW Hub</span>
+                    </h2>
+                  </div>
+                  <p className="text-xs text-slate-400 mt-2 flex flex-col sm:flex-row sm:items-center gap-2">
+                    <span>Siaga Ronda & Sistem Koordinasi Darurat RT/RW.</span>
+                    <button
+                      type="button"
+                      onClick={() => setShowSiskamlingGuide(!showSiskamlingGuide)}
+                      className="text-[10px] text-emerald-400 hover:text-white bg-white/5 hover:bg-white/10 px-2.5 py-0.5 rounded transition font-bold self-start cursor-pointer"
+                    >
+                      {showSiskamlingGuide ? 'Sembunyikan Info ✕' : 'Info Siskamling ℹ️'}
+                    </button>
+                  </p>
+                  {showSiskamlingGuide && (
+                    <p className="text-xs text-slate-300 bg-slate-900 border border-slate-850 p-3.5 rounded-xl mt-3 leading-relaxed animate-fadeIn">
+                      Portal koordinasi terpadu siaga siskamling, mitigasi keamanan darurat, serta penutupan brikade akses gapura utama secara instan dan cerdas. Ketik kata kunci seperti <code className="text-amber-400">"tutup RT 03"</code> di chatbox untuk menutup brikade jalan otomatis!
+                    </p>
+                  )}
+                </div>
+
+                <div className="flex items-center gap-2 shrink-0">
+                  {panicActive ? (
+                    <button
+                      onClick={handleDeactivatePanic}
+                      className="bg-emerald-600 hover:bg-emerald-700 active:scale-95 text-white text-xs font-black px-4 py-2.5 rounded-xl shadow-lg shadow-emerald-950/20 duration-150 flex items-center gap-1.5 cursor-pointer"
+                    >
+                      <CheckCircle className="w-4 h-4" /> Matikan Alarm / Aman
+                    </button>
+                  ) : (
+                    <button
+                      onClick={handleTriggerPanic}
+                      className="bg-rose-600 hover:bg-rose-700 active:scale-95 text-white text-xs font-black px-4 py-2.5 rounded-xl shadow-lg shadow-rose-955/20 duration-150 flex items-center gap-1.5 animate-pulse cursor-pointer"
+                    >
+                      <AlertTriangle className="w-4 h-4 animate-bounce" /> 🚨 TOMBOL PANIK (Ada Maling!)
+                    </button>
+                  )}
+                </div>
+              </div>
+            </div>
+
+            {/* Main grid split */}
+            <div className="grid grid-cols-1 lg:grid-cols-12 gap-6">
+              
+              {/* LEFT MAP & CONTROLS */}
+              <div className="lg:col-span-5 space-y-6">
+                
+                {/* Visual Gate Controls Card */}
+                <div className="bg-slate-900 border border-slate-800 rounded-2xl p-5 text-slate-100 shadow-xl">
+                  <div className="flex justify-between items-center border-b border-slate-800 pb-3 mb-4">
+                    <h3 className="font-extrabold text-sm flex items-center gap-1.5 tracking-tight text-white">
+                      <span className="w-2.5 h-2.5 bg-rose-500 rounded-full inline-block"></span>
+                      Manual Overrides & Portal Brikade
+                    </h3>
+                    <span className="text-[10px] font-mono text-slate-400 uppercase bg-slate-800 px-2 py-0.5 rounded">
+                      Autentikasi RLS
+                    </span>
+                  </div>
+
+                  {/* Interactive Map/Gates */}
+                  <div className="space-y-3">
+                    {/* Gate 03 */}
+                    <div className={`p-3 rounded-xl border transition-all duration-200 ${
+                      gatesStatus.gate03 
+                        ? 'bg-rose-950/50 border-rose-800 text-rose-200' 
+                        : 'bg-slate-950/60 border-slate-850 text-slate-300'
+                    }`}>
+                      <div className="flex items-center justify-between">
+                        <div className="flex items-center gap-2.5">
+                          <div className={`p-1.5 rounded-lg ${gatesStatus.gate03 ? 'bg-rose-900/40 text-rose-400' : 'bg-slate-800 text-slate-400'}`}>
+                            <Lock className="w-4 h-4" />
+                          </div>
+                          <div>
+                            <p className="font-bold text-xs">Gerbang Keluar RT 003</p>
+                            <p className="text-[10px] text-slate-400">Menuju simpang Jl. Kancil Luar</p>
+                          </div>
+                        </div>
+                        <button
+                          type="button"
+                          onClick={() => handleToggleGate('gate03')}
+                          className={`text-[10px] font-black px-3 py-1.5 rounded-lg duration-150 transition-all cursor-pointer ${
+                            gatesStatus.gate03 
+                              ? 'bg-rose-600 hover:bg-rose-500 text-white' 
+                              : 'bg-emerald-600 hover:bg-emerald-500 text-white'
+                          }`}
+                        >
+                          {gatesStatus.gate03 ? 'BUKA 🔓' : 'BLOKIR 🚧'}
+                        </button>
+                      </div>
+                    </div>
+
+                    {/* Gate 04 */}
+                    <div className={`p-3 rounded-xl border transition-all duration-200 ${
+                      gatesStatus.gate04 
+                        ? 'bg-rose-950/50 border-rose-800 text-rose-200' 
+                        : 'bg-slate-950/60 border-slate-850 text-slate-300'
+                    }`}>
+                      <div className="flex items-center justify-between">
+                        <div className="flex items-center gap-2.5">
+                          <div className={`p-1.5 rounded-lg ${gatesStatus.gate04 ? 'bg-rose-900/40 text-rose-400' : 'bg-slate-800 text-slate-400'}`}>
+                            <Lock className="w-4 h-4" />
+                          </div>
+                          <div>
+                            <p className="font-bold text-xs">Gerbang Keluar RT 004</p>
+                            <p className="text-[10px] text-slate-400">Batas Kampung Barat</p>
+                          </div>
+                        </div>
+                        <button
+                          type="button"
+                          onClick={() => handleToggleGate('gate04')}
+                          className={`text-[10px] font-black px-3 py-1.5 rounded-lg duration-150 transition-all cursor-pointer ${
+                            gatesStatus.gate04 
+                              ? 'bg-rose-600 hover:bg-rose-500 text-white' 
+                              : 'bg-emerald-600 hover:bg-emerald-500 text-white'
+                          }`}
+                        >
+                          {gatesStatus.gate04 ? 'BUKA 🔓' : 'BLOKIR 🚧'}
+                        </button>
+                      </div>
+                    </div>
+
+                    {/* Gate Utama */}
+                    <div className={`p-3 rounded-xl border transition-all duration-200 ${
+                      gatesStatus.gateUtama 
+                        ? 'bg-rose-950/50 border-rose-800 text-rose-200' 
+                        : 'bg-slate-950/60 border-slate-850 text-slate-300'
+                    }`}>
+                      <div className="flex items-center justify-between">
+                        <div className="flex items-center gap-2.5">
+                          <div className={`p-1.5 rounded-lg ${gatesStatus.gateUtama ? 'bg-rose-900/40 text-rose-400' : 'bg-slate-800 text-slate-400'}`}>
+                            <Lock className="w-4 h-4" />
+                          </div>
+                          <div>
+                            <p className="font-bold text-xs">Portal Utama Kelurahan</p>
+                            <p className="text-[10px] text-slate-400">Akses keluar masuk kampung</p>
+                          </div>
+                        </div>
+                        <button
+                          type="button"
+                          onClick={() => handleToggleGate('gateUtama')}
+                          className={`text-[10px] font-black px-3 py-1.5 rounded-lg duration-150 transition-all cursor-pointer ${
+                            gatesStatus.gateUtama 
+                              ? 'bg-rose-600 hover:bg-rose-500 text-white' 
+                              : 'bg-emerald-600 hover:bg-emerald-500 text-white'
+                          }`}
+                        >
+                          {gatesStatus.gateUtama ? 'BUKA 🔓' : 'BLOKIR 🚧'}
+                        </button>
+                      </div>
+                    </div>
+                  </div>
+                </div>
+
+                {/* AI Parser Guide Info */}
+                <div className="bg-gradient-to-br from-indigo-950 to-slate-950 border border-slate-800 rounded-2xl p-5 text-slate-200 space-y-3">
+                  <h4 className="font-extrabold text-sm text-slate-100 flex items-center gap-1.5 font-sans">
+                    <Zap className="w-4 h-4 text-amber-400 font-sans" />
+                    AI Brikade Parser
+                  </h4>
+                  <p className="text-xs text-slate-400 leading-relaxed font-sans">
+                    Sistem dilengkapi kecerdasan kata kunci real-time. Ketik perintah seperti <strong className="text-white">"tutup RT 03"</strong>, <strong className="text-white">"tutup jalan"</strong>, atau <strong className="text-white">"aman"</strong> di sebelah kanan. Sistem akan membaca pesan Anda dan mengubah brikade gerbang secara otomatis!
+                  </p>
+                </div>
+              </div>
+
+              {/* RIGHT KAMAR KOORDINASI CHAT ROOM */}
+              <div className="lg:col-span-7 flex flex-col gap-4">
+                <div className="bg-slate-900 border border-slate-800 rounded-2xl p-4 flex flex-col justify-between min-h-[460px] shadow-xl">
+                  
+                  {/* Chat room active status info */}
+                  <div className="flex items-center justify-between border-b border-slate-800 pb-3 mb-3">
+                    <div className="flex items-center gap-2">
+                      <span className="relative flex h-2.5 w-2.5">
+                        <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-rose-500 opacity-75"></span>
+                        <span className="relative inline-flex rounded-full h-2.5 w-2.5 bg-rose-600"></span>
+                      </span>
+                      <div>
+                        <span className="font-extrabold text-xs text-white">Hub Siskamling Aktif ({currentRole.toUpperCase()})</span>
+                        <p className="text-[10px] text-slate-400">Saluran RT 03, RT 04, Linmas Kelurahan</p>
+                      </div>
+                    </div>
+                    <span className="text-[9px] font-mono text-rose-450 bg-rose-950/40 border border-rose-900/50 px-2 py-0.5 rounded-full uppercase tracking-wider font-bold">
+                      Live Patrol
+                    </span>
+                  </div>
+
+                  {/* Messages container list */}
+                  <div className="flex-1 overflow-y-auto space-y-3 max-h-[310px] pr-1.5 my-2">
+                    {chatMessages.map((msg) => {
+                      const isSystem = msg.sender.includes('SYSTEM') || msg.sender.includes('📢') || msg.sender.includes('📢 SYSTEM');
+                      const isWarning = msg.sender.includes('ALARM') || msg.sender.includes('🚨') || msg.sender.includes('🚨 EMERGENCY ALARM');
+                      
+                      return (
+                        <div 
+                          key={msg.id} 
+                          className={`p-2.5 rounded-xl border text-xs ${
+                            isWarning 
+                              ? 'bg-rose-950/40 border-rose-800 text-rose-200' 
+                              : isSystem 
+                                ? 'bg-amber-950/30 border-amber-900/50 text-amber-250' 
+                                : 'bg-slate-950/50 border-slate-800 text-slate-300'
+                          }`}
+                        >
+                          <div className="flex justify-between items-center mb-1">
+                            <span className="font-extrabold text-[10px] tracking-wide text-white flex items-center gap-1">
+                              {msg.role === 'rt' ? '🧑‍💼' : msg.role === 'rw' ? '🦁' : '👤'} {msg.sender}
+                              <span className={`text-[9px] uppercase font-bold px-1.5 py-0.2 rounded scale-90 ${
+                                msg.role === 'warga' ? 'bg-emerald-950/50 text-emerald-400 border border-emerald-900/40' :
+                                msg.role === 'rt' ? 'bg-amber-950/50 text-amber-400 border border-amber-900/40' :
+                                msg.role === 'rw' ? 'bg-indigo-950/50 text-indigo-400 border border-indigo-900/40' :
+                                'bg-purple-950/50 text-purple-400 border border-purple-900/40'
+                              }`}>
+                                {msg.role.toUpperCase()}
+                              </span>
+                            </span>
+                            <span className="text-[9px] text-slate-500 font-mono">{msg.time}</span>
+                          </div>
+                          <p className="leading-relaxed font-sans">{msg.message}</p>
+                        </div>
+                      );
+                    })}
+                  </div>
+
+                  {/* Typing / Fast response preset clicks */}
+                  <div className="border-t border-slate-800 pt-3 mt-1">
+                    <p className="text-[9px] font-bold text-slate-500 uppercase mb-2 tracking-wider">Fast Clicks (Perintah Cepat):</p>
+                    <div className="flex flex-wrap gap-1.5 mb-2.5">
+                      <button
+                        type="button"
+                        onClick={() => setNewChatText('tutup RT 03')}
+                        className="text-[9px] font-bold bg-rose-950/50 border border-rose-800 hover:bg-rose-900/40 text-rose-400 px-2 py-1 rounded-lg cursor-pointer"
+                      >
+                        🚧 Tutup Portal 03
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => setNewChatText('tutup jalan')}
+                        className="text-[9px] font-bold bg-rose-950/50 border border-rose-800 hover:bg-rose-900/40 text-rose-400 px-2 py-1 rounded-lg cursor-pointer"
+                      >
+                        🚧 Tutup Semua Jalan
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => setNewChatText('aman aman')}
+                        className="text-[9px] font-bold bg-emerald-950/50 border border-emerald-800 hover:bg-emerald-900/40 text-emerald-400 px-2 py-1 rounded-lg cursor-pointer"
+                      >
+                        ✅ Kembali Kondusif
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => setNewChatText('Maling lari ke arah barat luar perbatasan RT 04!')}
+                        className="text-[9px] font-bold bg-slate-800 border border-slate-700 hover:bg-slate-700 text-slate-300 px-2 py-1 rounded-lg cursor-pointer"
+                      >
+                        🏃 Ke Arah Barat!
+                      </button>
+                    </div>
+
+                    {/* Chat Form input */}
+                    <form onSubmit={handleSendSiagaChat} className="flex gap-2">
+                      <input
+                        type="text"
+                        value={newChatText}
+                        onChange={(e) => setNewChatText(e.target.value)}
+                        placeholder="Ketik pesan koordinasi patroli siskamling..."
+                        className="flex-1 bg-slate-950 border border-slate-800 rounded-xl px-3 py-2 text-xs text-white focus:outline-none focus:ring-1 focus:ring-rose-500 focus:border-rose-500 font-sans shadow-inner placeholder-slate-600"
+                      />
+                      <button
+                        type="submit"
+                        className="bg-rose-600 hover:bg-rose-500 active:scale-95 text-white font-extrabold text-xs px-4 py-2 rounded-xl flex items-center gap-1 shrink-0 font-sans shadow-md duration-150 cursor-pointer"
+                      >
+                        <Send className="w-3.5 h-3.5" /> Kirim
+                      </button>
+                    </form>
+                  </div>
+
+                </div>
+              </div>
+
+            </div>
+
+          </div>
+        )}
+
         {/* ==================== TAB 2: DEVELOPER CONSOLE & SUPABASE INTEGRATION ==================== */}
         {activeTab === 'dev_console' && (
           <div className="bg-white rounded-2xl border border-slate-200 p-6 shadow-sm space-y-6">
@@ -2269,35 +3334,61 @@ export default function App() {
 
               {/* Right Column: SQL Migration preview & Guide instructions */}
               <div className="lg:col-span-5 space-y-4 text-xs text-slate-700">
-                <div className="bg-slate-50 rounded-xl p-4.5 border border-slate-200 space-y-3.5 leading-relaxed">
-                  <h4 className="font-extrabold text-slate-900 uppercase text-[10px] tracking-wider text-slate-400">Panduan Aktivasi Supabase</h4>
+                <div className="bg-slate-50 rounded-xl p-4.5 border border-slate-200 space-y-3 shadow-xs">
+                  <div className="flex justify-between items-center border-b border-slate-100 pb-2">
+                    <h4 className="font-extrabold text-slate-900 uppercase text-[10px] tracking-wider text-slate-400">Panduan Setup Database</h4>
+                    <button
+                      type="button"
+                      onClick={() => setShowSupabaseGuide(!showSupabaseGuide)}
+                      className="text-[10px] text-blue-600 hover:text-blue-850 bg-blue-50 hover:bg-blue-100 px-2.5 py-1 rounded-lg transition font-mono font-bold cursor-pointer"
+                    >
+                      {showSupabaseGuide ? 'Tutup ✕' : 'Buka ℹ️'}
+                    </button>
+                  </div>
                   
-                  <div className="space-y-3">
-                    <p>
-                      <strong>1. Buat Tabel Instan:</strong> Klik tombol <span className="text-blue-600 font-bold">"Jalankan Auto-Migration PostgreSQL"</span> setelah mengisi Connection URI dari dashboard Supabase Anda. Anda tidak perlu menyalin SQL manual!
-                    </p>
-                    <p>
-                      <strong>2. Set Up Auth:</strong> Aktifkan "Email SignUp" di panel authentication Supabase Anda. Registrasi baru akan otomatis membuat baris profil di tabel <code>profiles</code> berkat SQL Trigger yang kami pasang.
-                    </p>
-                    <p>
-                      <strong>3. Cost Optimal:</strong> Unggah file KTP/KK langsung terkompresi otomatis &lt; 150KB untuk menghemat ruang gratis 1GB.
-                    </p>
-                  </div>
+                  {showSupabaseGuide ? (
+                     <div className="space-y-3.5 mt-2 animate-fadeIn font-sans text-slate-650">
+                       <p>
+                         <strong>1. Buat Tabel Instan:</strong> Klik tombol <span className="text-blue-600 font-bold">"Jalankan Auto-Migration PostgreSQL"</span> setelah mengisi Connection URI dari dashboard Supabase Anda. Anda tidak perlu menyalin SQL manual!
+                       </p>
+                       <p>
+                         <strong>2. Set Up Auth:</strong> Aktifkan "Email SignUp" di panel authentication Supabase Anda. Registrasi baru akan otomatis membuat baris profil di tabel <code>profiles</code> berkat SQL Trigger yang kami pasang.
+                       </p>
+                       <p>
+                         <strong>3. Cost Optimal:</strong> Unggah file KTP/KK langsung terkompresi otomatis &lt; 150KB untuk menghemat ruang gratis 1GB.
+                       </p>
 
-                  <div className="bg-amber-50 p-3 rounded-lg border border-amber-200 flex gap-2.5 mt-2">
-                    <AlertTriangle className="w-4 h-4 text-amber-600 shrink-0" />
-                    <div>
-                      <p className="font-bold text-amber-900 text-[11px]">Keamanan Zero-Cost Backend</p>
-                      <p className="text-[10px] text-amber-800 mt-0.5">Seluruh keamanan database diamankan oleh Row Level Security (RLS) PostgreSQL kami sehingga frontend dapat melakukan query langsung dengan aman.</p>
-                    </div>
-                  </div>
+                       <div className="bg-amber-50 p-3 rounded-lg border border-amber-205 flex gap-2.5 mt-2">
+                         <AlertTriangle className="w-4 h-4 text-amber-600 shrink-0" />
+                         <div>
+                           <p className="font-bold text-amber-900 text-[11px]">Keamanan Zero-Cost Backend</p>
+                           <p className="text-[10px] text-amber-800 mt-0.5 font-sans">Seluruh keamanan database diamankan oleh Row Level Security (RLS) PostgreSQL kami sehingga frontend dapat melakukan query langsung dengan aman.</p>
+                         </div>
+                       </div>
+                     </div>
+                  ) : (
+                     <p className="text-[11px] text-slate-400 italic">Panduan koneksi & setup Supabase disembunyikan. Klik tombol di atas untuk membuka.</p>
+                  )}
                 </div>
 
                 <div className="bg-slate-900 text-slate-200 rounded-xl p-4 border border-slate-800 space-y-2">
-                  <p className="font-mono text-[10px] uppercase font-bold tracking-wider text-slate-500">Logika Monorepo Workspace:</p>
-                  <p className="leading-relaxed">
-                    Sesuai dengan filosofi monorepo, semua struktur transisi dan validasi role dipisahkan ke dalam shared package <code>@e-warga/logic</code> dan client instance di <code>@e-warga/supabase</code>. Ini memastikan codebase modular dan dapat dikembangkan dengan mudah di masa depan.
-                  </p>
+                  <div className="flex justify-between items-center border-b border-slate-850 pb-2">
+                    <p className="font-mono text-[10px] uppercase font-bold tracking-wider text-slate-500">Logika Monorepo Workspace</p>
+                    <button
+                      type="button"
+                      onClick={() => setShowMonorepoInfo(!showMonorepoInfo)}
+                      className="text-[10px] text-slate-400 hover:text-white bg-slate-800 hover:bg-slate-750 px-2 py-0.5 rounded transition font-mono font-bold cursor-pointer"
+                    >
+                      {showMonorepoInfo ? 'Tutup ✕' : 'Buka ℹ️'}
+                    </button>
+                  </div>
+                  {showMonorepoInfo ? (
+                    <p className="leading-relaxed text-slate-350 mt-1 text-[11px] animate-fadeIn">
+                      Sesuai dengan filosofi monorepo, semua struktur transisi dan validasi role dipisahkan ke dalam shared package <code>@e-warga/logic</code> dan client instance di <code>@e-warga/supabase</code>. Ini memastikan codebase modular dan dapat dikembangkan dengan mudah di masa depan.
+                    </p>
+                  ) : (
+                    <p className="text-[11px] text-slate-550 italic">Keterangan arsitektur sistem disembunyikan.</p>
+                  )}
                 </div>
               </div>
 
@@ -2326,9 +3417,21 @@ export default function App() {
                       E-WARGA DIGITAL <span className="text-xs font-mono font-extrabold bg-purple-800 text-purple-200 border border-purple-600 px-2.5 py-0.5 rounded-full uppercase tracking-widest">Secure Gateway</span>
                     </h2>
                   </div>
-                  <p className="text-xs sm:text-sm text-slate-300 max-w-2xl font-sans leading-relaxed">
-                    Sistem Manajemen Otentikasi dan Registrasi Warga Mandiri Kedaulatan Kelurahan. Didukung enkripsi end-to-end gratis dan kompresi file multimedia di bawah <span className="font-bold text-amber-400">150KB</span> demi menghemat kuota cloud Supabase database Anda.
+                  <p className="text-xs text-slate-400 mt-2 flex flex-col sm:flex-row sm:items-center gap-2">
+                    <span>Sistem Otentikasi & Registrasi Warga Mandiri Kelurahan.</span>
+                    <button
+                      type="button"
+                      onClick={() => setShowRegistrationGuide(!showRegistrationGuide)}
+                      className="text-[10px] text-purple-300 hover:text-white bg-white/5 hover:bg-white/10 px-2 py-0.5 rounded transition font-mono font-bold self-start cursor-pointer"
+                    >
+                      {showRegistrationGuide ? 'Sembunyikan Info ✕' : 'Detail Fitur ℹ️'}
+                    </button>
                   </p>
+                  {showRegistrationGuide && (
+                    <p className="text-xs text-slate-350 bg-slate-900 border border-slate-800 p-3.5 rounded-xl mt-3 leading-relaxed animate-fadeIn">
+                      Sistem Manajemen Otentikasi dan Registrasi Warga Mandiri Kedaulatan Kelurahan. Didukung enkripsi end-to-end gratis dan kompresi file multimedia di bawah <span className="font-bold text-amber-400">150KB</span> demi menghemat kuota cloud Supabase database Anda secara signifikan.
+                    </p>
+                  )}
                 </div>
                 
                 <div className="bg-slate-900/90 border border-slate-800 p-4 rounded-2xl flex items-center gap-4 shrink-0 shadow-lg">
@@ -2343,15 +3446,15 @@ export default function App() {
             </div>
 
             {/* PORTAL INTERNAL TABS */}
-            <div className="flex justify-between items-center bg-white p-3 rounded-2xl border border-slate-200 shadow-sm flex-wrap gap-3">
+            <div className="flex justify-between items-center bg-slate-50 p-2 rounded-2xl border border-slate-200/60 shadow-inner flex-wrap gap-3">
               <div className="flex gap-2 w-full sm:w-auto">
                 <button
                   type="button"
                   onClick={() => setActiveRegTab('register')}
-                  className={`flex items-center gap-2 px-4 py-2.5 text-xs font-extrabold rounded-xl transition duration-150 flex-1 sm:flex-initial justify-center ${
+                  className={`flex items-center gap-2 px-4.5 py-3 text-xs font-black rounded-xl transition-all duration-150 active:scale-95 flex-1 sm:flex-initial justify-center cursor-pointer ${
                     activeRegTab === 'register'
-                      ? 'bg-purple-600 text-white shadow-md shadow-purple-100'
-                      : 'text-slate-600 hover:bg-slate-50'
+                      ? 'bg-purple-600 text-white shadow-md shadow-purple-200 border-b-2 border-purple-800'
+                      : 'bg-white text-slate-700 hover:bg-slate-50 border border-slate-200 shadow-xs'
                   }`}
                 >
                   <PlusCircle className="w-4 h-4" />
@@ -2360,10 +3463,10 @@ export default function App() {
                 <button
                   type="button"
                   onClick={() => setActiveRegTab('manage')}
-                  className={`flex items-center gap-2 px-4 py-2.5 text-xs font-extrabold rounded-xl transition duration-150 flex-1 sm:flex-initial justify-center ${
+                  className={`flex items-center gap-2 px-4.5 py-3 text-xs font-black rounded-xl transition-all duration-150 active:scale-95 flex-1 sm:flex-initial justify-center cursor-pointer ${
                     activeRegTab === 'manage'
-                      ? 'bg-slate-900 text-white shadow-md shadow-slate-200'
-                      : 'text-slate-600 hover:bg-slate-50'
+                      ? 'bg-slate-900 text-white shadow-md shadow-slate-400 border-b-2 border-black'
+                      : 'bg-white text-slate-700 hover:bg-slate-50 border border-slate-200 shadow-xs'
                   }`}
                 >
                   <Users className="w-4 h-4" />
@@ -2372,8 +3475,19 @@ export default function App() {
               </div>
 
               {/* SIMULATION ROLE REMINDER BANNER */}
-              <div className="text-[10px] font-mono px-3.5 py-1.5 bg-yellow-50 text-yellow-800 border border-yellow-250 rounded-xl leading-relaxed max-w-md hidden md:block">
-                💡 <span className="font-extrabold">Tips Simulasi:</span> Role lu saat ini adalah <span className="font-black underline uppercase text-amber-900">{currentRole}</span>. Ganti ke <span className="font-bold text-purple-900">Admin</span> atau <span className="font-bold text-amber-900">RT/RW</span> di Hub Peran untuk menguji otorisasi verifikasi berkas!
+              <div className="flex items-center gap-2 flex-wrap">
+                <button
+                  type="button"
+                  onClick={() => setShowSimulatorGuide(!showSimulatorGuide)}
+                  className="text-[10px] font-bold text-amber-800 bg-amber-50 hover:bg-amber-100 border border-amber-200 px-3 py-2 rounded-xl flex items-center gap-1 transition"
+                >
+                  💡 {showSimulatorGuide ? 'Sembunyikan Tips ✕' : 'Tips Simulasi ℹ️'}
+                </button>
+                {showSimulatorGuide && (
+                  <div className="text-[10px] font-mono px-3.5 py-1.5 bg-yellow-50 text-yellow-800 border border-yellow-250 rounded-xl leading-relaxed max-w-md animate-fadeIn">
+                    Role Anda saat ini adalah <span className="font-black underline uppercase text-amber-900">{currentRole}</span>. Ganti ke <span className="font-bold text-purple-900">Admin</span> atau <span className="font-bold text-amber-905">RT/RW</span> di Hub Peran untuk menguji otorisasi verifikasi berkas!
+                  </div>
+                )}
               </div>
             </div>
 
@@ -2420,7 +3534,7 @@ export default function App() {
                         </div>
                       </div>
 
-                      <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                      <div>
                         <div>
                           <label className="block text-xs font-bold text-slate-700 uppercase tracking-wide mb-1">Nomor Induk Kependudukan (NIK)</label>
                           <input
@@ -2434,96 +3548,202 @@ export default function App() {
                           />
                           <p className="text-[9px] text-slate-400 mt-0.5">Sistem memvalidasi NIK KTP Anda harus tepat 16 digit angka.</p>
                         </div>
-
-                        <div>
-                          <label className="block text-xs font-bold text-slate-700 uppercase tracking-wide mb-1">Nomor Kartu Keluarga (KK) - Opsional</label>
-                          <input
-                            type="text"
-                            maxLength={16}
-                            placeholder="16 Digit Nomor KK (Kosongkan jika disimpan di lemari)"
-                            value={registerForm.no_kk}
-                            onChange={(e) => setRegisterForm(prev => ({ ...prev, no_kk: e.target.value.replace(/\D/g, '') }))}
-                            className="w-full bg-slate-50 border border-slate-200 rounded-xl p-3 text-xs focus:outline-none focus:ring-1 focus:ring-purple-500 font-mono"
-                          />
-                          <p className="text-[9px] text-slate-400 mt-0.5">KK di simpan terpisah? Kosongkan aja bro, gk wajib!</p>
-                        </div>
                       </div>
 
                       {/* DATA REGIONAL PEMBAGIAN TENAN (KABUPATEN/KOTA, KECAMATAN & DESA / KELURAHAN / KAMPUNG) */}
                       <div className="bg-purple-50/40 border border-purple-100 rounded-2xl p-4.5 space-y-4">
-                        <div>
-                          <h4 className="text-xs font-bold text-purple-950 flex items-center gap-1.5">
-                            📍 Sektor Wilayah Jawa Barat (Sovereigntal Multi-Tenant)
-                          </h4>
-                          <p className="text-[10px] text-purple-750 mt-1 leading-relaxed">
-                            Cegah data nyasar! Kami mengklasifisikan wilayah admin per kota/kabupaten, kecamatan, hingga desa/kelurahan sehingga antrean RT/RW 100% akurat.
-                          </p>
+                        <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between border-b border-purple-100 pb-3 gap-2">
+                          <div>
+                            <h4 className="text-xs font-bold text-purple-950 flex items-center justify-between w-full">
+                              <span className="flex items-center gap-1.5">📍 Sektor Wilayah Administratif</span>
+                              <button
+                                type="button"
+                                onClick={() => setShowRegionalInfo(!showRegionalInfo)}
+                                className="text-[9px] text-purple-750 hover:text-purple-900 bg-purple-100 hover:bg-purple-200 px-2.5 py-0.5 rounded-lg transition font-mono font-bold ml-2 shrink-0 cursor-pointer"
+                              >
+                                {showRegionalInfo ? 'Tutup ✕' : 'Detail ℹ️'}
+                              </button>
+                            </h4>
+                            {showRegionalInfo && (
+                              <p className="text-[10px] text-purple-750 mt-1 leading-relaxed bg-purple-100/20 p-2 rounded-lg border border-purple-100/30 animate-fadeIn">
+                                Klasifikasikan wilayah se-Indonesia dengan akurat agar antrean birokrasi RT/RW 100% tepat sasaran!
+                              </p>
+                            )}
+                          </div>
+                          <div className="flex bg-purple-100/50 p-0.5 rounded-xl border border-purple-200/60 self-start sm:self-center">
+                            <button
+                              type="button"
+                              onClick={() => {
+                                setUseLiveApi(false);
+                                setRegisterForm(prev => ({
+                                  ...prev,
+                                  provinsi: 'JAWA BARAT',
+                                  kabupaten: 'Kota Bandung',
+                                  kecamatan: 'Coblong',
+                                  kelurahan: 'Dago'
+                                }));
+                              }}
+                              className={`px-3 py-1 rounded-lg text-[10px] font-bold transition-all cursor-pointer ${
+                                !useLiveApi
+                                  ? 'bg-purple-600 text-white shadow-sm'
+                                  : 'text-purple-700 hover:text-purple-950'
+                              }`}
+                            >
+                              Jawa Barat (Offline)
+                            </button>
+                            <button
+                              type="button"
+                              onClick={() => setUseLiveApi(true)}
+                              className={`px-2.5 py-1 rounded-lg text-[10px] font-bold transition-all cursor-pointer ${
+                                useLiveApi
+                                  ? 'bg-purple-600 text-white shadow-sm'
+                                  : 'text-purple-700 hover:text-purple-950'
+                              }`}
+                            >
+                              Seluruh Indonesia (Live API) 🇮🇩
+                            </button>
+                          </div>
                         </div>
 
-                        <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-4 gap-3">
-                          <div>
-                            <label className="block text-[10px] font-bold text-purple-900 uppercase tracking-wider mb-1 min-h-[30px] flex items-end pb-0.5">Kota / Kabupaten</label>
-                            <select
-                              value={registerForm.kabupaten || 'Kota Bandung'}
-                              onChange={(e) => handleKabupatenChange(e.target.value)}
-                              className="w-full bg-white border border-slate-200 rounded-xl p-2.5 text-xs focus:outline-none focus:ring-1 focus:ring-purple-500 font-bold text-slate-800"
-                            >
-                              {Object.keys(REGIONAL_JABAR_DATA).map(kab => (
-                                <option key={kab} value={kab}>{kab}</option>
-                              ))}
-                            </select>
-                          </div>
+                        {useLiveApi ? (
+                          <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-5 gap-3">
+                            <div>
+                              <div className="min-h-[30px] flex items-end pb-1">
+                                <label className="block text-[10px] font-bold text-purple-900 uppercase tracking-wider">Provinsi</label>
+                              </div>
+                              <select
+                                value={selectedProvId}
+                                onChange={(e) => handleLiveProvinceChange(e.target.value)}
+                                className="w-full bg-white border border-slate-200 rounded-xl p-2.5 text-xs focus:outline-none focus:ring-1 focus:ring-purple-500 font-bold text-slate-800"
+                              >
+                                {provinces.map(p => (
+                                  <option key={p.id} value={p.id}>{p.name}</option>
+                                ))}
+                              </select>
+                            </div>
 
-                          <div>
-                            <label className="block text-[10px] font-bold text-purple-900 uppercase tracking-wider mb-1 min-h-[30px] flex items-end pb-0.5">Kecamatan</label>
-                            <select
-                              value={registerForm.kecamatan}
-                              onChange={(e) => handleKecamatanChange(e.target.value)}
-                              className="w-full bg-white border border-slate-200 rounded-xl p-2.5 text-xs focus:outline-none focus:ring-1 focus:ring-purple-500 font-bold text-slate-800"
-                            >
-                              {Object.keys(REGIONAL_JABAR_DATA[registerForm.kabupaten || 'Kota Bandung'] || {}).map(kec => (
-                                <option key={kec} value={kec}>{kec}</option>
-                              ))}
-                            </select>
-                          </div>
+                            <div>
+                              <div className="min-h-[30px] flex items-end pb-1 gap-1">
+                                <label className="block text-[10px] font-bold text-purple-900 uppercase tracking-wider">Kota / Kabupaten</label>
+                                {isLoadingWilayah && <span className="inline-block animate-spin text-purple-700 font-bold text-[8px]">●</span>}
+                              </div>
+                              <select
+                                value={selectedRegId}
+                                onChange={(e) => handleLiveRegencyChange(e.target.value)}
+                                className="w-full bg-white border border-slate-200 rounded-xl p-2.5 text-xs focus:outline-none focus:ring-1 focus:ring-purple-500 font-bold text-slate-800"
+                              >
+                                {regencies.map(r => (
+                                  <option key={r.id} value={r.id}>{r.name}</option>
+                                ))}
+                              </select>
+                            </div>
 
-                          <div>
-                            <label className="block text-[10px] font-bold text-purple-900 uppercase tracking-wider mb-1 min-h-[30px] flex items-end pb-0.5">Kelurahan / Desa</label>
-                            <select
-                              value={registerForm.kelurahan}
-                              onChange={(e) => setRegisterForm(prev => ({ ...prev, kelurahan: e.target.value }))}
-                              className="w-full bg-white border border-slate-200 rounded-xl p-2.5 text-xs focus:outline-none focus:ring-1 focus:ring-purple-500 font-bold text-slate-800"
-                            >
-                              {(REGIONAL_JABAR_DATA[registerForm.kabupaten || 'Kota Bandung']?.[registerForm.kecamatan] || []).map(kel => (
-                                <option key={kel} value={kel}>{kel}</option>
-                              ))}
-                            </select>
-                          </div>
+                            <div>
+                              <div className="min-h-[30px] flex items-end pb-1">
+                                <label className="block text-[10px] font-bold text-purple-900 uppercase tracking-wider">Kecamatan</label>
+                              </div>
+                              <select
+                                value={selectedDistId}
+                                onChange={(e) => handleLiveDistrictChange(e.target.value)}
+                                className="w-full bg-white border border-slate-200 rounded-xl p-2.5 text-xs focus:outline-none focus:ring-1 focus:ring-purple-500 font-bold text-slate-800"
+                              >
+                                {districts.map(d => (
+                                  <option key={d.id} value={d.id}>{d.name}</option>
+                                ))}
+                              </select>
+                            </div>
 
-                          <div>
-                            <label className="block text-[10px] font-bold text-purple-900 uppercase tracking-wider mb-1 min-h-[30px] flex items-end pb-0.5">Kampung / Blok / Rumah</label>
-                            <input
-                              type="text"
-                              required
-                              placeholder="Contoh: Dusun III, Blok RT 3"
-                              value={registerForm.kampung}
-                              onChange={(e) => setRegisterForm(prev => ({ ...prev, kampung: e.target.value }))}
-                              className="w-full bg-white border border-slate-200 rounded-xl p-2.5 text-xs focus:outline-none focus:ring-1 focus:ring-purple-500 font-semibold text-slate-800"
-                            />
-                          </div>
-                        </div>
-                      </div>
+                            <div>
+                              <div className="min-h-[30px] flex items-end pb-1">
+                                <label className="block text-[10px] font-bold text-purple-900 uppercase tracking-wider">Kelurahan / Desa</label>
+                              </div>
+                              <select
+                                value={selectedVillId}
+                                onChange={(e) => handleLiveVillageChange(e.target.value)}
+                                className="w-full bg-white border border-slate-200 rounded-xl p-2.5 text-xs focus:outline-none focus:ring-1 focus:ring-purple-500 font-bold text-slate-800"
+                              >
+                                {villages.map(v => (
+                                  <option key={v.id} value={v.id}>{v.name}</option>
+                                ))}
+                              </select>
+                            </div>
 
-                      {/* Manual Address override & RT selection up to 25 / RW up to 15 */}
-                      <div>
-                        <label className="block text-xs font-bold text-slate-700 uppercase tracking-wide mb-1">Alamat KTP Lengkap (Override manual)</label>
-                        <textarea
-                          rows={1}
-                          placeholder="Kosongkan jika ingin generate alamat otomatis dari Kecamatan/Kelurahan di atas"
-                          value={registerForm.alamat}
-                          onChange={(e) => setRegisterForm(prev => ({ ...prev, alamat: e.target.value }))}
-                          className="w-full bg-slate-50 border border-slate-200 rounded-xl p-3 text-xs focus:outline-none focus:ring-1 focus:ring-purple-500 text-slate-800"
-                        />
+                            <div>
+                              <div className="min-h-[30px] flex items-end pb-1">
+                                <label className="block text-[10px] font-bold text-purple-900 uppercase tracking-wider">Kampung / Blok / Perumahan</label>
+                              </div>
+                              <input
+                                type="text"
+                                required
+                                placeholder="Contoh: Dusun III, Blok RT 3"
+                                value={registerForm.kampung}
+                                onChange={(e) => setRegisterForm(prev => ({ ...prev, kampung: e.target.value }))}
+                                className="w-full bg-white border border-slate-200 rounded-xl p-2.5 text-xs focus:outline-none focus:ring-1 focus:ring-purple-500 font-semibold text-slate-800"
+                              />
+                            </div>
+                          </div>
+                        ) : (
+                          <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-4 gap-3">
+                            <div>
+                              <div className="min-h-[30px] flex items-end pb-1">
+                                <label className="block text-[10px] font-bold text-purple-900 uppercase tracking-wider">Kota / Kabupaten</label>
+                              </div>
+                              <select
+                                value={registerForm.kabupaten || 'Kota Bandung'}
+                                onChange={(e) => handleKabupatenChange(e.target.value)}
+                                className="w-full bg-white border border-slate-200 rounded-xl p-2.5 text-xs focus:outline-none focus:ring-1 focus:ring-purple-500 font-bold text-slate-800"
+                              >
+                                {Object.keys(REGIONAL_JABAR_DATA).map(kab => (
+                                  <option key={kab} value={kab}>{kab}</option>
+                                ))}
+                              </select>
+                            </div>
+
+                            <div>
+                              <div className="min-h-[30px] flex items-end pb-1">
+                                <label className="block text-[10px] font-bold text-purple-900 uppercase tracking-wider">Kecamatan</label>
+                              </div>
+                              <select
+                                value={registerForm.kecamatan}
+                                onChange={(e) => handleKecamatanChange(e.target.value)}
+                                className="w-full bg-white border border-slate-200 rounded-xl p-2.5 text-xs focus:outline-none focus:ring-1 focus:ring-purple-500 font-bold text-slate-800"
+                              >
+                                {Object.keys(REGIONAL_JABAR_DATA[registerForm.kabupaten || 'Kota Bandung'] || {}).map(kec => (
+                                  <option key={kec} value={kec}>{kec}</option>
+                                ))}
+                              </select>
+                            </div>
+
+                            <div>
+                              <div className="min-h-[30px] flex items-end pb-1">
+                                <label className="block text-[10px] font-bold text-purple-900 uppercase tracking-wider">Kelurahan / Desa</label>
+                              </div>
+                              <select
+                                value={registerForm.kelurahan}
+                                onChange={(e) => setRegisterForm(prev => ({ ...prev, kelurahan: e.target.value }))}
+                                className="w-full bg-white border border-slate-200 rounded-xl p-2.5 text-xs focus:outline-none focus:ring-1 focus:ring-purple-500 font-bold text-slate-800"
+                              >
+                                {(REGIONAL_JABAR_DATA[registerForm.kabupaten || 'Kota Bandung']?.[registerForm.kecamatan] || []).map(kel => (
+                                  <option key={kel} value={kel}>{kel}</option>
+                                ))}
+                              </select>
+                            </div>
+
+                            <div>
+                              <div className="min-h-[30px] flex items-end pb-1">
+                                <label className="block text-[10px] font-bold text-purple-900 uppercase tracking-wider">Kampung / Blok / Rumah</label>
+                              </div>
+                              <input
+                                type="text"
+                                required
+                                placeholder="Contoh: Dusun III, Blok RT 3"
+                                value={registerForm.kampung}
+                                onChange={(e) => setRegisterForm(prev => ({ ...prev, kampung: e.target.value }))}
+                                className="w-full bg-white border border-slate-200 rounded-xl p-2.5 text-xs focus:outline-none focus:ring-1 focus:ring-purple-500 font-semibold text-slate-800"
+                              />
+                            </div>
+                          </div>
+                        )}
                       </div>
 
                       <div className="grid grid-cols-3 gap-4">
@@ -2570,7 +3790,7 @@ export default function App() {
                       </div>
 
                       {/* Attachment scans powered by E-Warga Compression */}
-                      <div className="grid grid-cols-1 md:grid-cols-2 gap-4 pt-2">
+                      <div className="pt-2">
                         {/* KTP Upload */}
                         <div className="border border-dashed border-slate-250 bg-slate-50/50 p-4 rounded-xl space-y-2 flex flex-col justify-between">
                           <div className="flex justify-between items-start">
@@ -2583,52 +3803,21 @@ export default function App() {
 
                           {registerForm.file_ktp ? (
                             <div className="relative pt-1">
-                              <img src={registerForm.file_ktp} alt="KTP preview" className="h-20 w-full object-cover rounded-lg border border-slate-200" />
+                              <img src={registerForm.file_ktp} alt="KTP preview" className="h-32 w-full object-cover rounded-lg border border-slate-200" />
                               <button
                                 type="button"
                                 onClick={() => setRegisterForm(prev => ({ ...prev, file_ktp: '', ktpSize: 0 }))}
-                                className="absolute top-2 right-2 bg-rose-600 p-1 rounded-full text-white hover:bg-rose-700 cursor-pointer text-[10px]"
+                                className="absolute top-2 right-2 bg-rose-600 p-1.5 rounded-full text-white hover:bg-rose-700 cursor-pointer text-[10px]"
                               >
                                 ✕
                               </button>
                               <p className="text-[9px] font-mono text-emerald-600 font-semibold mt-1">✓ Berhasil dikompresi: {registerForm.ktpSize} KB</p>
                             </div>
                           ) : (
-                            <label className="flex flex-col items-center justify-center border border-slate-200 rounded-xl py-3 hover:bg-slate-100 cursor-pointer border-dashed bg-white">
-                              <Upload className="w-4 h-4 text-slate-450 mb-1" />
+                            <label className="flex flex-col items-center justify-center border border-slate-200 rounded-xl py-5 hover:bg-slate-100 cursor-pointer border-dashed bg-white">
+                              <Upload className="w-5 h-5 text-slate-450 mb-1.5" />
                               <span className="text-[10px] font-bold text-slate-655 font-sans">Unggah Foto KTP</span>
                               <input type="file" accept="image/*" className="hidden" onChange={(e) => handleRegFileUpload(e, 'ktp')} />
-                            </label>
-                          )}
-                        </div>
-
-                        {/* KK Upload */}
-                        <div className="border border-dashed border-slate-250 bg-slate-50/50 p-4 rounded-xl space-y-2 flex flex-col justify-between">
-                          <div className="flex justify-between items-start">
-                            <div>
-                              <p className="text-xs font-bold text-slate-800">Scan KK Terkini</p>
-                              <p className="text-[10px] text-slate-400 mt-0.5">Otomatis reduksi ukuran piksel</p>
-                            </div>
-                            <span className="text-[9px] font-mono bg-blue-100 text-blue-800 font-bold px-1.5 py-0.5 rounded">Auto Safe</span>
-                          </div>
-
-                          {registerForm.file_kk ? (
-                            <div className="relative pt-1">
-                              <img src={registerForm.file_kk} alt="KK preview" className="h-20 w-full object-cover rounded-lg border border-slate-200" />
-                              <button
-                                type="button"
-                                onClick={() => setRegisterForm(prev => ({ ...prev, file_kk: '', kkSize: 0 }))}
-                                className="absolute top-2 right-2 bg-rose-600 p-1 rounded-full text-white hover:bg-rose-700 cursor-pointer text-[10px]"
-                              >
-                                ✕
-                              </button>
-                              <p className="text-[9px] font-mono text-emerald-600 font-semibold mt-1">✓ Berhasil dikompresi: {registerForm.kkSize} KB</p>
-                            </div>
-                          ) : (
-                            <label className="flex flex-col items-center justify-center border border-slate-200 rounded-xl py-3 hover:bg-slate-100 cursor-pointer border-dashed bg-white">
-                              <Upload className="w-4 h-4 text-slate-450 mb-1" />
-                              <span className="text-[10px] font-bold text-slate-655 font-sans">Unggah Bukti KK</span>
-                              <input type="file" accept="image/*" className="hidden" onChange={(e) => handleRegFileUpload(e, 'kk')} />
                             </label>
                           )}
                         </div>
@@ -2637,9 +3826,9 @@ export default function App() {
                       {/* Secure Sign and Submit */}
                       <button
                         type="submit"
-                        className="w-full bg-gradient-to-r from-purple-700 to-indigo-700 hover:from-purple-800 hover:to-indigo-800 text-white font-extrabold text-xs py-3 px-5 rounded-xl shadow duration-150 flex items-center justify-center gap-2 cursor-pointer border border-purple-500/30"
+                        className="w-full bg-gradient-to-r from-purple-700 to-indigo-700 hover:from-purple-800 hover:to-indigo-800 text-white font-black text-xs py-4 px-6 rounded-2xl shadow-lg border-b-4 border-purple-900 active:border-b-0 active:translate-y-1 transition-all duration-75 flex items-center justify-center gap-2.5 cursor-pointer outline-none select-none relative overflow-hidden"
                       >
-                        <Lock className="w-3.5 h-3.5 text-purple-200" />
+                        <Lock className="w-4 h-4 text-purple-200 animate-pulse" />
                         Verifikasi & Daftarkan Melalui E-Warga Secure Core
                       </button>
                     </form>
@@ -2690,7 +3879,7 @@ export default function App() {
                         <div>
                           <p className="text-slate-400 leading-none">ALAMAT DOMISILI</p>
                           <p className="font-extrabold truncate text-white mt-0.5 uppercase tracking-wide max-w-[200px]">
-                            {registerForm.alamat || 'ALAMAT LENGKAP KELURAHAN'}
+                            {`${registerForm.kampung ? registerForm.kampung + ', ' : ''}${registerForm.kelurahan || ''}, ${registerForm.kecamatan || ''}`.trim() || 'ALAMAT LENGKAP KELURAHAN'}
                           </p>
                         </div>
 
@@ -2984,15 +4173,367 @@ export default function App() {
 
       </main>
 
+      {/* NATIVE APK-STYLE BOTTOM NAVIGATION BAR FOR MOBILE PWA INSTAL */}
+      <div className="fixed bottom-0 left-0 right-0 z-50 bg-white/95 backdrop-blur-md border-t border-slate-200/80 px-4 py-2.5 flex justify-around items-center md:hidden pb-safe shadow-[0_-8px_30px_rgba(0,0,0,0.08)] rounded-t-3xl border-x">
+        <button
+          type="button"
+          onClick={() => {
+            setActiveTab('simulation');
+            window.scrollTo({ top: 0, behavior: 'smooth' });
+          }}
+          className={`flex flex-col items-center justify-center gap-1 py-1 px-4 rounded-xl transition-all duration-150 active:scale-90 cursor-pointer ${
+            activeTab === 'simulation'
+              ? 'text-emerald-700 font-extrabold bg-emerald-50/80 shadow-xs border-b-2 border-emerald-500'
+              : 'text-slate-500 hover:text-slate-800'
+          }`}
+        >
+          <Smartphone className={`w-4.5 h-4.5 ${activeTab === 'simulation' ? 'stroke-[2.5px] text-emerald-600' : ''}`} />
+          <span className="text-[10px] font-bold">Simulasi</span>
+        </button>
+
+        <button
+          type="button"
+          onClick={() => {
+            setActiveTab('registration_portal');
+            window.scrollTo({ top: 0, behavior: 'smooth' });
+          }}
+          className={`flex flex-col items-center justify-center gap-1 py-1 px-4 rounded-xl transition-all duration-150 active:scale-90 cursor-pointer ${
+            activeTab === 'registration_portal'
+              ? 'text-purple-700 font-extrabold bg-purple-50/80 shadow-xs border-b-2 border-purple-500'
+              : 'text-slate-500 hover:text-slate-800'
+          }`}
+        >
+          <Fingerprint className={`w-4.5 h-4.5 ${activeTab === 'registration_portal' ? 'stroke-[2.5px] text-purple-600' : ''}`} />
+          <span className="text-[10px] font-bold">Pendaftaran</span>
+        </button>
+
+        <button
+          type="button"
+          onClick={() => {
+            setActiveTab('chat_siskamling');
+            window.scrollTo({ top: 0, behavior: 'smooth' });
+          }}
+          className={`flex flex-col items-center justify-center gap-1 py-1 px-4 rounded-xl transition-all duration-150 active:scale-90 cursor-pointer ${
+            activeTab === 'chat_siskamling'
+              ? 'text-rose-700 font-extrabold bg-rose-50/80 shadow-xs border-b-2 border-rose-500'
+              : 'text-slate-500 hover:text-slate-800'
+          }`}
+        >
+          <MessageSquare className={`w-4.5 h-4.5 ${activeTab === 'chat_siskamling' ? 'stroke-[2.5px] text-rose-600' : ''}`} />
+          <span className="text-[10px] font-bold">Chat</span>
+        </button>
+
+        <button
+          type="button"
+          onClick={() => {
+            setActiveTab('dev_console');
+            window.scrollTo({ top: 0, behavior: 'smooth' });
+          }}
+          className={`flex flex-col items-center justify-center gap-1 py-1 px-4 rounded-xl transition-all duration-150 active:scale-90 cursor-pointer ${
+            activeTab === 'dev_console'
+              ? 'text-blue-700 font-extrabold bg-blue-50/80 shadow-xs border-b-2 border-blue-500'
+              : 'text-slate-500 hover:text-slate-800'
+          }`}
+        >
+          <Database className={`w-4.5 h-4.5 ${activeTab === 'dev_console' ? 'stroke-[2.5px] text-blue-650' : ''}`} />
+          <span className="text-[10px] font-bold">Database</span>
+        </button>
+      </div>
+
+      {/* MODAL PRATINJAU & CETAK SURAT PENGANTAR */}
+      {printingSurat && (
+        <div className="fixed inset-0 bg-slate-900/70 backdrop-blur-xs flex items-center justify-center p-4 z-50 overflow-y-auto animate-in fade-in duration-200">
+          {/* Custom style for printed media, scoped to printingSurat session */}
+          <style dangerouslySetInnerHTML={{ __html: `
+            @media print {
+              body * {
+                visibility: hidden !important;
+              }
+              #printable-letter-area, #printable-letter-area * {
+                visibility: visible !important;
+              }
+              #printable-letter-area {
+                position: absolute !important;
+                left: 0 !important;
+                top: 0 !important;
+                width: 100% !important;
+                padding: 15mm 20mm !important;
+                border: none !important;
+                box-shadow: none !important;
+                background: white !important;
+                color: black !important;
+                min-height: auto !important;
+              }
+            }
+          `}} />
+
+          <div className="bg-white dark:bg-slate-900 rounded-3xl max-w-5xl w-full shadow-2xl overflow-hidden border border-slate-200 dark:border-slate-800 flex flex-col lg:flex-row max-h-[90vh] lg:h-[85vh]">
+            
+            {/* LEFT SIDE PANEL - CONTROLS */}
+            <div className="bg-slate-950 text-white p-6 lg:w-[325px] flex flex-col justify-between shrink-0 border-b lg:border-b-0 lg:border-r border-slate-800">
+              <div className="space-y-4 text-left">
+                <div className="p-2.5 bg-indigo-600/20 text-indigo-400 rounded-2xl border border-indigo-500/20 inline-block">
+                  <Printer className="w-6 h-6" />
+                </div>
+                <div>
+                  <h3 className="text-lg font-extrabold tracking-tight">Cetak Surat Pengantar</h3>
+                  <p className="text-[11px] text-slate-400 mt-1 leading-relaxed">
+                    Dokumen ini sah dan memiliki nomor surat serta tanda tangan digital resmi dari pengurus RT/RW setempat.
+                  </p>
+                </div>
+
+                <div className="bg-slate-900 border border-slate-800 rounded-2xl p-4 space-y-3">
+                  <span className="text-[10px] text-slate-400 uppercase tracking-widest font-mono font-bold block">Detail Berkas</span>
+                  <div className="space-y-2 text-xs">
+                    <p className="flex justify-between"><span className="text-slate-500">ID Berkas:</span> <span className="font-mono text-slate-350">{printingSurat.id.substring(0, 8)}...</span></p>
+                    <p className="flex justify-between"><span className="text-slate-500">Jenis Surat:</span> <span className="font-bold text-slate-300">{printingSurat.jenis_surat}</span></p>
+                    <p className="flex justify-between"><span className="text-slate-500">Pengaju:</span> <span className="font-bold text-slate-300 truncate max-w-[140px] block text-right">{printingSurat.warga_nama}</span></p>
+                    <p className="flex justify-between">
+                      <span className="text-slate-500">Status:</span> 
+                      <span className="px-2 py-0.5 text-[9px] rounded-md font-bold bg-indigo-500/10 text-indigo-400 border border-indigo-400/20">
+                        {formatStatusLabel(printingSurat.status)}
+                      </span>
+                    </p>
+                  </div>
+                </div>
+
+                <div className="bg-[#14231b] border border-emerald-950/50 rounded-2xl p-4 text-xs text-emerald-305 space-y-2">
+                  <p className="font-bold">💡 Informasi Penting:</p>
+                  <ul className="list-disc pl-4 space-y-1 text-[11px] text-emerald-400/90 leading-relaxed">
+                    <li>Semua peran (Warga, RT, RW) berhak mengunduh/mencetak surat yang telah disetujui.</li>
+                    <li>Warga wajib mencetak surat pengantar ini sebagai lampiran pendaftaran fisik ke kelurahan/kecamatan.</li>
+                    <li>Sistem dilengkapi penanda keamanan QR Code untuk validasi keaslian dokumen.</li>
+                  </ul>
+                </div>
+              </div>
+
+              <div className="flex flex-col gap-2.5 pt-6 lg:pt-0 border-t border-slate-800/80 mt-6 lg:mt-0">
+                <button
+                  type="button"
+                  onClick={() => window.print()}
+                  className="w-full bg-emerald-600 hover:bg-emerald-700 text-white font-extrabold text-sm py-3 px-4 rounded-xl shadow-lg flex items-center justify-center gap-2 duration-150 cursor-pointer"
+                >
+                  <Printer className="w-4 h-4 animate-pulse" /> Cetak Sekarang (Print / PDF)
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setPrintingSurat(null)}
+                  className="w-full bg-slate-900 hover:bg-slate-850 text-slate-400 hover:text-white font-bold text-xs py-2.5 px-4 rounded-xl border border-slate-800 flex items-center justify-center gap-1.5 duration-150 cursor-pointer"
+                >
+                  Tutup Pratinjau
+                </button>
+              </div>
+            </div>
+
+            {/* RIGHT SIDE PANEL - THE PAPER SHEET PREVIEW */}
+            <div className="bg-slate-100 dark:bg-[#070b13] p-4 lg:p-8 flex-1 overflow-y-auto flex items-start justify-center">
+              
+              {/* Paper Sheet Simulation */}
+              <div 
+                id="printable-letter-area" 
+                className="bg-white text-slate-950 p-6 sm:p-12 md:p-16 shadow-xl w-full max-w-[210mm] border border-slate-350 min-h-[297mm] text-left relative overflow-hidden flex flex-col justify-between font-serif selection:bg-slate-200"
+                style={{ color: '#09090b', fontFamily: 'Georgia, "Times New Roman", Times, serif' }}
+              >
+                <div>
+                  
+                  {/* KOP SURAT PEMERINTAH */}
+                  <div className="flex items-center gap-4 pb-4 border-b-4 border-double border-black relative">
+                    <div className="hidden sm:flex shrink-0 w-16 h-16 rounded-full border-2 border-black items-center justify-center font-extrabold text-2xl text-center border-dashed font-sans tracking-tighter shadow-xs">
+                      🇮🇩
+                    </div>
+                    <div className="flex-1 text-center font-sans">
+                      <h4 className="text-xs sm:text-xs font-bold tracking-widest uppercase text-slate-800">
+                        PEMERINTAH {printingSurat.warga_kabupaten ? printingSurat.warga_kabupaten.toUpperCase() : 'KOTA ADMINISTRASI JAKARTA SELATAN'}
+                      </h4>
+                      <h3 className="text-sm sm:text-sm font-extrabold tracking-wider uppercase mt-0.5 text-slate-900">
+                        KECAMATAN {printingSurat.warga_kecamatan ? printingSurat.warga_kecamatan.toUpperCase() : 'KEBAYORAN BARU'} - KELURAHAN {printingSurat.warga_kelurahan ? printingSurat.warga_kelurahan.toUpperCase() : 'SELONG'}
+                      </h3>
+                      <h2 className="text-base sm:text-base font-black tracking-wide uppercase text-black">
+                        RUKUN TETANGGA {printingSurat.warga_rt || '003'} / RUKUN WARGA {printingSurat.warga_rw || '004'}
+                      </h2>
+                      <p className="text-[9px] sm:text-[10px] text-slate-600 font-mono mt-1">
+                        Alamat: {printingSurat.warga_kampung ? `${printingSurat.warga_kampung}, ` : ''}RT {printingSurat.warga_rt || '003'} / RW {printingSurat.warga_rw || '004'}, Kel. {printingSurat.warga_kelurahan || 'Selong'}, Kec. {printingSurat.warga_kecamatan || 'Kebayoran Baru'}
+                      </p>
+                    </div>
+                  </div>
+
+                  {/* JUDUL SURAT */}
+                  <div className="text-center mt-6">
+                    <h3 className="text-base font-black tracking-widest uppercase underline" style={{ fontSize: '15px' }}>SURAT PENGANTAR</h3>
+                    <p className="text-xs font-mono tracking-wide mt-1 text-slate-700">
+                      Nomor: {printingSurat.nomor_surat_rw || printingSurat.nomor_surat_rt || 'PM/___/RTRW/VI/2026'}
+                    </p>
+                  </div>
+
+                  {/* PARAGRAF PEMBUKA */}
+                  <div className="mt-8 text-xs sm:text-sm text-justify leading-relaxed text-slate-900">
+                    <p>Yang bertanda tangan di bawah ini Pengurus RT {printingSurat.warga_rt || '003'} / RW {printingSurat.warga_rw || '004'} Kelurahan {printingSurat.warga_kelurahan || 'Selong'}, Kecamatan {printingSurat.warga_kecamatan || 'Kebayoran Baru'}, {printingSurat.warga_kabupaten || 'Jakarta Selatan'}, dengan ini menerangkan dengan sebenarnya bahwa:</p>
+                  </div>
+
+                  {/* DETAIL DETAIL WARGA */}
+                  <div className="mt-6 space-y-2 sm:space-y-3 text-xs sm:text-sm px-2 sm:px-6">
+                    <table className="w-full border-collapse">
+                      <tbody>
+                        <tr className="align-top">
+                          <td className="w-32 py-1.5 font-bold text-slate-800">1. Nama Lengkap</td>
+                          <td className="w-4 py-1.5 text-center text-slate-500">:</td>
+                          <td className="py-1.5 uppercase font-black tracking-wide text-black">{printingSurat.warga_nama}</td>
+                        </tr>
+                        <tr className="align-top">
+                          <td className="py-1.5 font-bold text-slate-800">2. Nomor NIK</td>
+                          <td className="text-center text-slate-500">:</td>
+                          <td className="py-1.5 font-mono text-slate-800">{printingSurat.warga_nik ? `${printingSurat.warga_nik.substring(0,6)}**********` : '3173****************'}</td>
+                        </tr>
+                        <tr className="align-top">
+                          <td className="py-1.5 font-bold text-slate-800">3. Nomor KK</td>
+                          <td className="text-center text-slate-500">:</td>
+                          <td className="py-1.5 font-mono text-slate-800">{printingSurat.warga_kk ? `${printingSurat.warga_kk.substring(0,6)}**********` : '3173****************'}</td>
+                        </tr>
+                        <tr className="align-top">
+                          <td className="py-1.5 font-bold text-slate-800">4. Alamat Lengkap</td>
+                          <td className="text-center text-slate-500">:</td>
+                          <td className="py-1.5 text-slate-800">
+                            {printingSurat.warga_kampung ? `${printingSurat.warga_kampung}, ` : ''}RT {printingSurat.warga_rt || '003'} / RW {printingSurat.warga_rw || '004'} Kelurahan {printingSurat.warga_kelurahan || 'Selong'}, Kecamatan {printingSurat.warga_kecamatan || 'Kebayoran Baru'}, {printingSurat.warga_kabupaten || 'Jakarta Selatan'}
+                          </td>
+                        </tr>
+                        <tr className="align-top">
+                          <td className="py-1.5 font-bold text-slate-800">5. Jenis Pengajuan</td>
+                          <td className="text-center text-slate-500">:</td>
+                          <td className="py-1.5 font-bold text-indigo-900 uppercase tracking-wide underline">{printingSurat.jenis_surat}</td>
+                        </tr>
+                        <tr className="align-top">
+                          <td className="py-1.5 font-bold text-slate-800">6. Keperluan</td>
+                          <td className="text-center text-slate-500">:</td>
+                          <td className="py-1.5 italic font-sans text-slate-800 bg-slate-50 p-2.5 rounded-lg border border-slate-200">
+                            "{printingSurat.keperluan}"
+                          </td>
+                        </tr>
+                      </tbody>
+                    </table>
+                  </div>
+
+                  {/* PARAGRAF PENUTUP */}
+                  <div className="mt-8 text-xs sm:text-sm text-justify leading-relaxed text-slate-900">
+                    <p>Orang tersebut di atas memang benar adalah warga kami yang bertempat tinggal di lingkungan RT {printingSurat.warga_rt || '003'} / RW {printingSurat.warga_rw || '004'} Kelurahan {printingSurat.warga_kelurahan || 'Selong'}. Surat pengantar ini dibuat sebagai persyaratan kelengkapan administratif untuk pengurusan dokumen yang bersangkutan.</p>
+                    <p className="mt-3">Demikian surat pengantar ini dibuat dengan sebenar-benarnya untuk dipergunakan secara bijaksana sebagaimana mestinya.</p>
+                  </div>
+
+                </div>
+
+                {/* SIGNATURE PANELS SECTION */}
+                <div className="mt-14 pt-6 border-t border-slate-200">
+                  <div className="flex flex-col sm:flex-row items-stretch justify-between gap-6 text-xs font-sans text-slate-900">
+                    
+                    {/* SIGN RW */}
+                    <div className="text-center w-48 mx-auto sm:mx-0 flex flex-col justify-between">
+                      <div>
+                        <p className="text-slate-500 text-[10px] uppercase font-mono">Mengetahui,</p>
+                        <p className="font-bold uppercase tracking-wider text-slate-800 text-[11px]">Ketua RW {printingSurat.warga_rw || '004'}</p>
+                      </div>
+                      <div className="h-28 flex flex-col items-center justify-center relative my-2 border border-slate-100 bg-slate-50 rounded-xl p-3">
+                        {printingSurat.nomor_surat_rw ? (
+                          <>
+                            {/* Seal Badge */}
+                            <div className="absolute inset-0 flex items-center justify-center opacity-10 rotate-12 pointer-events-none">
+                              <ShieldCheck className="w-20 h-20 text-emerald-800" />
+                            </div>
+                            <span className="text-[10px] text-emerald-700 font-extrabold flex items-center gap-1">
+                              <CheckCircle className="w-3.5 h-3.5" /> SIGNED DIGITAL
+                            </span>
+                            <span className="text-[9px] font-mono text-slate-500 mt-1">{printingSurat.nomor_surat_rw}</span>
+                            <span className="text-[8px] text-slate-400 mt-0.5">{new Date(printingSurat.updated_at || printingSurat.created_at).toLocaleDateString('id-ID')}</span>
+                          </>
+                        ) : (
+                          <span className="text-[10px] text-slate-450 italic">Antrean RW</span>
+                        )}
+                      </div>
+                      <div>
+                        <p className="font-black underline uppercase text-slate-800">H. SUTISNA WIJAYA</p>
+                        <p className="text-[9px] text-slate-400 font-mono mt-0.5">NIP. RTRW.423.8329</p>
+                      </div>
+                    </div>
+
+                    {/* QR CODE CENTER SECURITY SEAL */}
+                    <div className="text-center self-center flex flex-col items-center justify-center gap-1 border border-slate-200 rounded-2xl p-3 bg-slate-50/50 w-36 mx-auto sm:mx-0 shrink-0">
+                      <Fingerprint className="w-10 h-10 text-indigo-700/80 opacity-85 animate-pulse" />
+                      <span className="text-[8px] font-bold tracking-tight text-slate-600">ID VERIFIKASI DIGITAL</span>
+                      <span className="text-[7px] font-mono text-slate-400 select-all">{printingSurat.id.substring(0, 16)}...</span>
+                      <div className="text-[7px] text-emerald-600 font-extrabold bg-emerald-50 px-1.5 py-0.5 rounded-full border border-emerald-100 flex items-center gap-0.5 mt-0.5">
+                        ✓ SECURE DOCUMENT
+                      </div>
+                    </div>
+
+                    {/* SIGN RT */}
+                    <div className="text-center w-48 mx-auto sm:mx-0 flex flex-col justify-between">
+                      <div>
+                        <p className="text-slate-500 text-[10px] uppercase font-mono font-sans">Dikeluarkan di {printingSurat.warga_kabupaten || 'Jakarta'},</p>
+                        <p className="font-bold uppercase tracking-wider text-slate-800 text-[11px] font-sans">Ketua RT {printingSurat.warga_rt || '003'}</p>
+                      </div>
+                      <div className="h-28 flex flex-col items-center justify-center relative my-2 border border-slate-100 bg-slate-50 rounded-xl p-3">
+                        {printingSurat.nomor_surat_rt ? (
+                          <>
+                            {/* Seal Badge */}
+                            <div className="absolute inset-0 flex items-center justify-center opacity-10 rotate-12 pointer-events-none">
+                              <ShieldCheck className="w-20 h-20 text-indigo-800" />
+                            </div>
+                            <span className="text-[10px] text-indigo-700 font-extrabold flex items-center gap-1">
+                              <CheckCircle className="w-3.5 h-3.5" /> SIGNED DIGITAL
+                            </span>
+                            <span className="text-[9px] font-mono text-slate-500 mt-1">{printingSurat.nomor_surat_rt}</span>
+                            <span className="text-[8px] text-slate-400 mt-0.5">{new Date(printingSurat.created_at).toLocaleDateString('id-ID')}</span>
+                          </>
+                        ) : (
+                          <span className="text-[10px] text-slate-450 italic">Antrean RT</span>
+                        )}
+                      </div>
+                      <div>
+                        <p className="font-black underline uppercase text-slate-800">BUDI SENTOSA, M.M.</p>
+                        <p className="text-[9px] text-slate-400 font-mono mt-0.5">NIP. RTRW.423.8328</p>
+                      </div>
+                    </div>
+
+                  </div>
+                </div>
+
+              </div>
+            </div>
+
+          </div>
+        </div>
+      )}
+
       {/* 3. FOOTER SIGNATURE */}
-      <footer className="bg-white border-t border-slate-200 py-6 mt-12">
+      <footer className="bg-white border-t border-slate-200 py-6 mt-12 mb-16 md:mb-0">
         <div className="max-w-7xl mx-auto px-4 text-center space-y-2">
-          <p className="text-xs text-slate-400">E-Warga Monorepo Platform © 2026. Handcrafted with Care by <span className="font-bold text-slate-600">Arblok Digital</span>.</p>
+          <p className="text-xs text-slate-400">
+            E-Warga Monorepo Platform © 2026. Handcrafted with Care by <span className="font-bold text-slate-600">Arblok Digital</span>.
+          </p>
+          <p className="text-xs text-slate-500">
+            Ada Bug / Usulan Fitur Baru? <a href="https://wa.me/6289508053795?text=Halo%20Super%20Admin%20E-Warga,%20ada%20bug%20atau%20usulan%20fitur:" target="_blank" rel="noopener noreferrer" className="font-extrabold text-emerald-650 hover:text-emerald-700 underline flex inline-items items-center gap-1.5 justify-center">💬 Chat Super Admin (0895-0805-3795)</a>
+          </p>
           <p className="text-[10px] font-mono text-slate-350">
             Workspaces: 📂 apps/warga-pwa | 📂 packages/logic | 📂 packages/supabase
           </p>
         </div>
       </footer>
+
+      {/* 4. FLOATING SUPPORT CHAT - SUPER ADMIN (WA BUG REPORT) */}
+      <div className="fixed bottom-24 sm:bottom-6 right-5 sm:right-6 z-45 print:hidden">
+        <a 
+          href="https://wa.me/6289508053795?text=Halo%20Super%20Admin%20E-Warga%20(089508053795),%20saya%20menemukan%20bug%20atau%20ingin%20mengusulkan%20fitur%20baru:%20"
+          target="_blank"
+          rel="noopener noreferrer"
+          className="flex items-center gap-2 bg-emerald-600 text-white font-extrabold text-xs px-3.5 py-2.5 rounded-full shadow-lg hover:bg-emerald-700 hover:scale-105 active:scale-95 transition-all duration-150 border border-emerald-500/30"
+          title="Lapor Bug / Usul Fitur ke Super Admin (WhatsApp)"
+        >
+          <div className="relative flex h-2 w-2">
+            <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-emerald-300 opacity-75"></span>
+            <span className="relative inline-flex rounded-full h-2 w-2 bg-emerald-100"></span>
+          </div>
+          <span className="hidden leading-none sm:inline">Ada Bug? Chat Super Admin (0895-0805-3795)</span>
+          <span className="inline leading-none sm:hidden">Lapor Bug Super Admin 💬</span>
+        </a>
+      </div>
 
     </div>
   );

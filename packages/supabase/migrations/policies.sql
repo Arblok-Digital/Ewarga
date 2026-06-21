@@ -15,6 +15,7 @@ create table if not exists public.profiles (
   role text check (role in ('warga', 'rt', 'rw', 'staff_kecamatan', 'admin')) default 'warga',
   status_verifikasi text check (status_verifikasi in ('pending', 'verified', 'rejected')) default 'pending',
   kabupaten text,
+  provinsi text default 'Jawa Barat',
   kecamatan text,
   kelurahan text,
   kampung text,
@@ -74,6 +75,7 @@ declare
   default_no_wa text;
   default_role text;
   default_kabupaten text;
+  default_provinsi text;
   default_kecamatan text;
   default_kelurahan text;
   default_kampung text;
@@ -87,13 +89,14 @@ begin
   default_no_wa := coalesce(new.raw_user_meta_data->>'no_wa', '');
   default_role := coalesce(new.raw_user_meta_data->>'role', 'warga');
   default_kabupaten := coalesce(new.raw_user_meta_data->>'kabupaten', 'Kota Bandung');
+  default_provinsi := coalesce(new.raw_user_meta_data->>'provinsi', 'Jawa Barat');
   default_kecamatan := coalesce(new.raw_user_meta_data->>'kecamatan', 'Coblong');
   default_kelurahan := coalesce(new.raw_user_meta_data->>'kelurahan', 'Dago');
   default_kampung := coalesce(new.raw_user_meta_data->>'kampung', '');
 
   insert into public.profiles (
     id, nama_lengkap, nik, no_kk, alamat, rt, rw, no_wa, role, status_verifikasi,
-    kabupaten, kecamatan, kelurahan, kampung
+    kabupaten, provinsi, kecamatan, kelurahan, kampung
   )
   values (
     new.id,
@@ -107,6 +110,7 @@ begin
     default_role,
     'pending',
     default_kabupaten,
+    default_provinsi,
     default_kecamatan,
     default_kelurahan,
     default_kampung
